@@ -3,8 +3,8 @@
 A2 Racer (Davilex, 1997, Dutch release) on the **Miyoo Mini Plus** and
 **Miyoo Mini Flip** with **Onion OS**, using the open-source OpenA2 engine.
 
-The Mini Plus is tested. The Mini Flip uses the same chip and the same build,
-and is expected to work, but nobody has confirmed that yet.
+It is being tested on a Mini Plus. The Mini Flip uses the same chip and the
+same build and is expected to work, but is untested.
 
 ## What you need
 
@@ -22,7 +22,7 @@ and is expected to work, but nobody has confirmed that yet.
 
    | Put in `data/` | What it is |
    |---|---|
-   | `CD/` | the whole CD folder, with `RCS.IND`, `RCS.IMG`, `ETAPPE1.TRK`, ... inside |
+   | `CD/` (or any folder name) | the whole CD folder, with `RCS.IND`, `RCS.IMG`, `ETAPPE1.TRK`, ... inside |
    | the CD's files | copied straight into `data/` |
    | `CD.iso` or any `*.iso` | an ISO disc image |
    | `track.bin` (any `*.bin`) | a raw MODE2/2352 image from a BIN/CUE pair; keep the `.cue` next to it |
@@ -31,10 +31,10 @@ and is expected to work, but nobody has confirmed that yet.
 3. On the device, open **Games > Ports** and run **~Import ports**.
 4. Start **OpenA2RacerMini**. The intro movie plays on the first launch only.
 
-If the game does not start, read
-`Roms/PORTS/Games/OpenA2RacerMini/logs/latest.log`. Without game data it lists
-what was looked for and where; with broken or incomplete data the game shows an
-error page (press Menu to return to Onion) and the log names the missing file.
+Without game data, or with broken or incomplete data, the game shows an error
+page; press Menu to return to Onion.
+`Roms/PORTS/Games/OpenA2RacerMini/logs/latest.log` then lists what was looked
+for and where, or names the missing file.
 
 Saves, profiles and settings live in
 `Roms/PORTS/Games/OpenA2RacerMini/saves/`. The save files are the same as on

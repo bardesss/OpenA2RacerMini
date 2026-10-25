@@ -26,6 +26,8 @@ has_marker() {
 # find_data DIR: prints the path to hand to opena2 --data, or returns 2.
 # Accepted, in this order:
 #   DIR/CD/        the CD folder (any case) with RCS.IND inside
+#   DIR/<any>/     any other folder with RCS.IND inside (a copy named after
+#                  the volume label, such as A2RACER); the first one wins
 #   DIR            the CD's files copied straight into DIR
 #   DIR/CD.iso     (any case)
 #   DIR/*.iso      the first ISO image
@@ -34,6 +36,12 @@ has_marker() {
 find_data() {
   for f in "$1"/*; do
     [ -d "$f" ] && [ "$(upper "${f##*/}")" = CD ] && has_marker "$f" && {
+      echo "$f"
+      return 0
+    }
+  done
+  for f in "$1"/*; do
+    [ -d "$f" ] && has_marker "$f" && {
       echo "$f"
       return 0
     }
@@ -63,7 +71,7 @@ no_data_reason() {
 OpenA2RacerMini: A2 Racer game data not found.
 Looked in: $1/ (the port's data/ folder)
 Looked for, in this order:
-  data/CD/       a copy of the CD folder, with RCS.IND inside
+  data/CD/       a copy of the CD folder (any folder name), with RCS.IND inside
   data/RCS.IND   the CD's files copied straight into data/
   data/CD.iso    or any other data/*.iso disc image
   data/*.bin     a raw BIN/CUE disc image (for example track.bin)
@@ -82,6 +90,11 @@ main() {
 
   if ! DATA=$(find_data "$PORT_DIR/data"); then
     no_data_reason "$PORT_DIR/data" >logs/latest.log
+    # Still start the game: given data/ without game files it shows its error
+    # page (copy your CD to data/), so the player sees why; Menu returns to
+    # Onion. The exit status stays 2 for "no data".
+    # shellcheck disable=SC2048,SC2086
+    ./opena2 --data "$PORT_DIR/data" --prefs "$PORT_DIR/saves" $* >>logs/latest.log 2>&1
     sync
     exit 2
   fi

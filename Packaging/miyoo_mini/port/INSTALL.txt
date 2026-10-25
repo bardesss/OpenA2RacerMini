@@ -9,7 +9,8 @@ OpenA2RacerMini - install on Onion OS (Miyoo Mini Plus / Mini Flip)
 2. Copy your own A2 Racer CD (Dutch release, Davilex 1997) to
      Roms/PORTS/Games/OpenA2RacerMini/data/
    in one of these forms:
-     data/CD/          the whole CD folder (RCS.IND, RCS.IMG, ETAPPE1.TRK, ... inside)
+     data/CD/          the whole CD folder (RCS.IND, RCS.IMG, ETAPPE1.TRK, ... inside);
+                       any folder name works, for example data/A2RACER/
      data/             the CD's files copied straight into data/
      data/CD.iso       an ISO image (any name ending in .iso works)
      data/track.bin    a raw BIN/CUE image (keep the .cue next to it)
@@ -21,7 +22,8 @@ OpenA2RacerMini - install on Onion OS (Miyoo Mini Plus / Mini Flip)
 
 4. Start it. The intro movie plays on the first launch only.
 
-If the game does not start, look at
+Without game data the game shows an error page; press Menu to return to Onion.
+For details, look at
   Roms/PORTS/Games/OpenA2RacerMini/logs/latest.log
 It says what data was looked for and where, or why the game stopped.
 

@@ -53,10 +53,18 @@ cases() {
 
   p=$(fresh_port)
   expect "empty data/ -> exit 2, nothing printed" "2:" "$(run_find "$p")"
-  # The whole launcher, not just the function: exit 2 and a reason in the log.
-  (cd "$p" && sh ./launch.sh >/dev/null 2>&1)
+  # The whole launcher, not just the function: a reason in the log, then the
+  # game starts on the empty data/ so it shows its error page; exit 2.
+  printf '#!/bin/sh\necho "stand-in game called: $*"\nexit 1\n' >"$p/opena2"
+  chmod +x "$p/opena2"
+  (cd "$p" && sh ./launch.sh --mute >/dev/null 2>&1)
   status=$?
   expect "launch.sh without data exits 2" 2 "$status"
+  if grep -q "stand-in game called: --data $p/data --prefs $p/saves --mute" "$p/logs/latest.log"; then
+    pass "without data the game still starts on data/ (error page)"
+  else
+    fail "without data the game still starts on data/ (log: $(cat "$p/logs/latest.log"))"
+  fi
   if grep -q "data/" "$p/logs/latest.log" 2>/dev/null; then
     pass "no-data log mentions data/"
   else
@@ -130,7 +138,37 @@ cases() {
 
   p=$(fresh_port)
   mkdir "$p/data/My CD" && : >"$p/data/My CD/RCS.IND" && : >"$p/data/my disc.iso"
-  expect "names with spaces" "0:data/my disc.iso" "$(run_find "$p")"
+  expect "folder name with spaces, preferred over an image" "0:data/My CD" "$(run_find "$p")"
+  rm -rf "$p"
+
+  p=$(fresh_port)
+  : >"$p/data/my disc.iso"
+  expect "image name with spaces" "0:data/my disc.iso" "$(run_find "$p")"
+  rm -rf "$p"
+
+  p=$(fresh_port)
+  mkdir "$p/data/A2RACER" && : >"$p/data/A2RACER/RCS.IND"
+  expect "CD folder named after the volume label -> data/A2RACER" "0:data/A2RACER" "$(run_find "$p")"
+  rm -rf "$p"
+
+  p=$(fresh_port)
+  mkdir "$p/data/a2racer" && : >"$p/data/a2racer/rcs.ind"
+  expect "lowercase data/a2racer/rcs.ind -> data/a2racer" "0:data/a2racer" "$(run_find "$p")"
+  rm -rf "$p"
+
+  p=$(fresh_port)
+  mkdir "$p/data/A2RACER" "$p/data/CD" && : >"$p/data/A2RACER/RCS.IND" && : >"$p/data/CD/RCS.IND"
+  expect "a CD folder is preferred over another named folder" "0:data/CD" "$(run_find "$p")"
+  rm -rf "$p"
+
+  p=$(fresh_port)
+  mkdir "$p/data/A2RACER" && : >"$p/data/A2RACER/RCS.IND" && : >"$p/data/RCS.IND"
+  expect "a named CD folder is preferred over files in data/" "0:data/A2RACER" "$(run_find "$p")"
+  rm -rf "$p"
+
+  p=$(fresh_port)
+  mkdir "$p/data/extras" && : >"$p/data/extras/README.TXT" && : >"$p/data/track.bin"
+  expect "a folder without the marker is not data" "0:data/track.bin" "$(run_find "$p")"
   rm -rf "$p"
 
   # The run part: a stand-in game records its arguments and exit status.
@@ -204,6 +242,24 @@ game_case() {
   (cd "$p" && SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
     sh ./launch.sh --frames 30 >/dev/null 2>&1)
   expect "complete synthetic copy runs and exits 0" 0 "$?"
+  rm -rf "$p"
+
+  echo "== no data with $exe =="
+  p=$(fresh_port)
+  cp "$exe" "$p/opena2"
+  echo "put the CD here" >"$p/data/PUT_A2_RACER_CD_HERE.txt"
+  (cd "$p" && SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+    sh ./launch.sh --frames 30 --screenshot "$p/nodata.bmp" >/dev/null 2>&1)
+  expect "no data: launch.sh exits 2" 2 "$?"
+  if grep -q "Looked for" "$p/logs/latest.log" &&
+    grep -q "OpenA2: A2 Racer data not found" "$p/logs/latest.log"; then
+    pass "no data: log has the launcher reason and the game's error"
+  else
+    fail "no data: log (got: $(cat "$p/logs/latest.log"))"
+  fi
+  if [ -s "$p/nodata.bmp" ]; then pass "no data: error page was rendered"; else fail "no data: error page was rendered"; fi
+  if [ -n "${A2_KEEP_BMP:-}" ]; then cp "$p/nodata.bmp" "$A2_KEEP_BMP"; fi
+  sed 's/^/     log: /' "$p/logs/latest.log"
   rm -rf "$p"
 }
 

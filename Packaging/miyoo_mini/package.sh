@@ -89,7 +89,8 @@ cp "$ROOT/README-MIYOO.md" "$GAME/README.md"
 cat >"$GAME/data/PUT_A2_RACER_CD_HERE.txt" <<'EOF'
 Put your own copy of the Dutch A2 Racer CD in this folder, in one of these forms:
 
-  CD/          the CD folder (the files RCS.IND, RCS.IMG, ETAPPE1.TRK, ... inside)
+  CD/          the CD folder (the files RCS.IND, RCS.IMG, ETAPPE1.TRK, ... inside;
+               any folder name works)
   the CD's files directly in this folder
   CD.iso       or any other .iso disc image
   track.bin    a raw BIN/CUE disc image (keep the .cue next to it)

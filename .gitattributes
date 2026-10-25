@@ -1,0 +1,5 @@
+# Keep LF in the working copy too: scripts run in Docker and on the Miyoo.
+* text=auto eol=lf
+*.png binary
+*.ttf binary
+*.7z binary

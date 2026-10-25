@@ -12,16 +12,20 @@
 # against the SHA-256 pinned in CMakeLists.txt) and is handed to FetchContent,
 # so the build downloads nothing. The images have no X11/ALSA headers; SDL
 # builds its dummy/offscreen drivers, which is all --headless needs.
+# --miyoo configures with -DA2_MIYOO=ON (host compiler, desktop SDL2), so the
+# #if A2_MIYOO code compiles and the tests run in the device configuration.
 #
-# Usage: host-test.sh [--rebuild] [--game] [gcc-major-version]
+# Usage: host-test.sh [--rebuild] [--game] [--miyoo] [gcc-major-version]
 # Env:   A2_HOSTTEST_CACHE  archive cache dir (default ~/.cache/opena2mini-hosttest)
 set -euo pipefail
 REBUILD=0
 GAME=0
+MIYOO=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --rebuild) REBUILD=1 ;;
     --game) GAME=1 ;;
+    --miyoo) MIYOO=1 ;;
     *) break ;;
   esac
   shift
@@ -108,6 +112,9 @@ if [ "$GAME" = 1 ]; then
   fi
   MOUNTS+=(-v "$CACHE:/cache:ro")
   GAME_ARGS="-DA2_BUILD_GAME=ON -DA2_USE_SYSTEM_SDL2=OFF -DFETCHCONTENT_SOURCE_DIR_SDL2=/tmp/sdl2/SDL2-${SDL2_VER}"
+fi
+if [ "$MIYOO" = 1 ]; then
+  GAME_ARGS="$GAME_ARGS -DA2_MIYOO=ON"
 fi
 
 exec docker run --rm "${MOUNTS[@]}" -e "GAME_ARGS=$GAME_ARGS" -e "SDL2_TGZ=${SDL2_TGZ:-}" "$IMAGE" bash -c '

@@ -14,6 +14,10 @@
 #include <memory>
 #include <sstream>
 #include <thread>
+#if A2_MIYOO
+#include "miyoo_controls.hpp"
+#include <unistd.h>
+#endif
 
 namespace a2 {
 namespace fs = std::filesystem;
@@ -184,8 +188,14 @@ struct Settings {
   bool music = true, effects = true, mute = false, radar = true, fullscreen = false,
        enhanced = false, horizon = true, dashboard = true, lowResolution = false;
   int musicVolume = 4, effectsVolume = 4;
+#if A2_MIYOO
+  // Left, right, brake, gas: D-pad steers, B (LCTRL) brakes, A (SPACE) accelerates.
+  std::array<SDL_Scancode, 4> keys{SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT, SDL_SCANCODE_LCTRL,
+                                   SDL_SCANCODE_SPACE};
+#else
   std::array<SDL_Scancode, 4> keys{SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT, SDL_SCANCODE_DOWN,
                                    SDL_SCANCODE_UP};
+#endif
   int camera = 1, car = 0, unlocked = 0;
   std::string name = "SPELER";
 };
@@ -400,6 +410,11 @@ public:
       std::cout << "Frame " << frame << ", stage " << race_->stage() + 1 << ", distance "
                 << race_->player.distance << ", speed " << race_->player.speed << ", money "
                 << race_->player.money << "\n";
+#if A2_MIYOO
+    // Flush the autosave, settings and profiles: the device may be powered
+    // off right after the Menu button.
+    sync();
+#endif
     return autosaveFailed ? 1 : 0;
   }
 
@@ -592,7 +607,11 @@ private:
     in.brake = float(k[settings_.keys[2]] || (standard && k[SDL_SCANCODE_S]));
     in.steer = float(k[settings_.keys[1]] || (standard && k[SDL_SCANCODE_D])) -
                float(k[settings_.keys[0]] || (standard && k[SDL_SCANCODE_A]));
+#if A2_MIYOO
+    in.handbrake = k[SDL_SCANCODE_T]; // R1
+#else
     in.handbrake = k[SDL_SCANCODE_SPACE];
+#endif
     if (controller_) {
       float axis = SDL_GameControllerGetAxis(controller_, SDL_CONTROLLER_AXIS_LEFTX) / 32767.0f;
       if (std::abs(axis) > 0.15f)
@@ -664,7 +683,17 @@ private:
       profiles_->save();
   }
   void askName() {
+#if A2_MIYOO
+    // No keyboard on the device: pre-fill a unique name that A (Confirm) accepts.
+    std::vector<std::string> names;
+    if (profiles_)
+      for (const auto &slot : profiles_->slots())
+        if (slot)
+          names.push_back(slot->name);
+    editedName_ = defaultPlayerName(names);
+#else
     editedName_ = "Speler";
+#endif
     selectName_ = true;
     go(Page::Name);
     SDL_StartTextInput();
@@ -1216,11 +1245,104 @@ private:
         return;
       }
   }
+#if A2_MIYOO
+  // miyoo_controls.cpp hard-codes these SDL2 numbers to stay SDL-free.
+  static_assert(SDL_SCANCODE_UP == 82 && SDL_SCANCODE_DOWN == 81 && SDL_SCANCODE_LEFT == 80 &&
+                    SDL_SCANCODE_RIGHT == 79 && SDL_SCANCODE_SPACE == 44 &&
+                    SDL_SCANCODE_LCTRL == 224 && SDL_SCANCODE_LSHIFT == 225 &&
+                    SDL_SCANCODE_LALT == 226 && SDL_SCANCODE_E == 8 && SDL_SCANCODE_T == 23 &&
+                    SDL_SCANCODE_TAB == 43 && SDL_SCANCODE_BACKSPACE == 42 &&
+                    SDL_SCANCODE_RETURN == 40 && SDL_SCANCODE_RCTRL == 228 &&
+                    SDL_SCANCODE_ESCAPE == 41,
+                "SDL scancodes differ from the Miyoo button table");
+  MiyooControls miyoo_;
+  MiyooContext miyooContext(MiyooButton b) const {
+    if (page_ == Page::Movie)
+      return MiyooContext::Movie;
+    if (page_ != Page::Playing)
+      return MiyooContext::Menu;
+    // Fine dialog: A confirms (upstream dismiss). Menu and its L2/R2 combos
+    // stay in the race, so Menu still autosaves.
+    if (race_->fineDelay() > 0 && b != MiyooButton::Menu && b != MiyooButton::L2 &&
+        b != MiyooButton::R2)
+      return MiyooContext::Menu;
+    return MiyooContext::Race;
+  }
+  void miyooKey(SDL_Scancode code, SDL_Keycode sym, bool down) {
+    // BEDIENING key binding takes the raw key, as on the desktop.
+    if (down && binding_ >= 0) {
+      key(sym);
+      return;
+    }
+    auto button = miyooButtonFromScancode(int(code));
+    if (!button)
+      return;
+    auto context = miyooContext(*button);
+    for (auto command : down ? miyoo_.press(*button, context) : miyoo_.release(*button, context))
+      miyooCommand(command);
+  }
+  void miyooCommand(MiyooCommand command) {
+    switch (command) {
+    case MiyooCommand::Up:
+      key(SDLK_UP);
+      break;
+    case MiyooCommand::Down:
+      key(SDLK_DOWN);
+      break;
+    case MiyooCommand::Left:
+      key(SDLK_LEFT);
+      break;
+    case MiyooCommand::Right:
+      key(SDLK_RIGHT);
+      break;
+    case MiyooCommand::Confirm:
+      key(SDLK_RETURN);
+      break;
+    case MiyooCommand::Back:
+      key(SDLK_ESCAPE);
+      break;
+    case MiyooCommand::Pause:
+      key(SDLK_p);
+      break;
+    case MiyooCommand::CycleCamera:
+      settings_.camera = (settings_.camera + 1) % 3;
+      break;
+    case MiyooCommand::ToggleRadar:
+      key(SDLK_F5);
+      break;
+    case MiyooCommand::RestartStage:
+      key(SDLK_r);
+      break;
+    case MiyooCommand::QuickSave:
+      saveSlot(0);
+      break;
+    case MiyooCommand::QuickLoad:
+      loadSlot(0);
+      break;
+    case MiyooCommand::AutosaveAndExit:
+      // Exit even if the save failed (status 0); no message is shown.
+      if (!saveAutosave())
+        std::cerr << "OpenA2: " << message_ << "\n";
+      messageTime_ = 0;
+      quit_ = true;
+      break;
+    case MiyooCommand::Exit:
+      quit_ = true;
+      break;
+    }
+  }
+#endif
   void events() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
       if (e.type == SDL_QUIT)
         quit_ = true;
+#if A2_MIYOO
+      else if (e.type == SDL_TEXTINPUT) {
+        // Button-only names: the button keys (SPACE, E, T, ...) must not type.
+      } else if ((e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) && !e.key.repeat)
+        miyooKey(e.key.keysym.scancode, e.key.keysym.sym, e.type == SDL_KEYDOWN);
+#else
       else if (e.type == SDL_TEXTINPUT && page_ == Page::Name) {
         std::string candidate = selectName_ ? std::string() : editedName_;
         candidate += e.text.text;
@@ -1234,6 +1356,7 @@ private:
         selectName_ = false;
       } else if (e.type == SDL_KEYDOWN && (!e.key.repeat || page_ == Page::Name))
         key(e.key.keysym.sym);
+#endif
       else if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST &&
                page_ == Page::Playing)
         paused_ = true;

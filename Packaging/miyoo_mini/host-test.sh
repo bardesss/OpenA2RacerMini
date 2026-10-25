@@ -14,18 +14,26 @@
 # builds its dummy/offscreen drivers, which is all --headless needs.
 # --miyoo configures with -DA2_MIYOO=ON (host compiler, desktop SDL2), so the
 # #if A2_MIYOO code compiles and the tests run in the device configuration.
+# --then CMD runs CMD (with sh) in the container after ctest passes, with the
+# build in /tmp/build (verify-launch.sh uses it for /tmp/build/opena2).
+# --mount HOST:CONTAINER adds a read-only bind mount (repeatable).
 #
-# Usage: host-test.sh [--rebuild] [--game] [--miyoo] [gcc-major-version]
+# Usage: host-test.sh [--rebuild] [--game] [--miyoo] [--then CMD]
+#                     [--mount HOST:CONTAINER]... [gcc-major-version]
 # Env:   A2_HOSTTEST_CACHE  archive cache dir (default ~/.cache/opena2mini-hosttest)
 set -euo pipefail
 REBUILD=0
 GAME=0
 MIYOO=0
+THEN=""
+EXTRA_MOUNTS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --rebuild) REBUILD=1 ;;
     --game) GAME=1 ;;
     --miyoo) MIYOO=1 ;;
+    --then) THEN="$2"; shift ;;
+    --mount) EXTRA_MOUNTS+=(-v "$2:ro"); shift ;;
     *) break ;;
   esac
   shift
@@ -117,7 +125,8 @@ if [ "$MIYOO" = 1 ]; then
   GAME_ARGS="$GAME_ARGS -DA2_MIYOO=ON"
 fi
 
-exec docker run --rm "${MOUNTS[@]}" -e "GAME_ARGS=$GAME_ARGS" -e "SDL2_TGZ=${SDL2_TGZ:-}" "$IMAGE" bash -c '
+MOUNTS+=(${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"})
+exec docker run --rm "${MOUNTS[@]}" -e "GAME_ARGS=$GAME_ARGS" -e "SDL2_TGZ=${SDL2_TGZ:-}"   -e "THEN=$THEN" "$IMAGE" bash -c '
 set -euo pipefail
 echo "== gcc $(gcc -dumpfullversion) =="
 cmake --version | head -1
@@ -130,4 +139,8 @@ fi
 cmake -S /src -B /tmp/build -G Ninja $GAME_ARGS -DCMAKE_BUILD_TYPE=Release
 cmake --build /tmp/build -j"$(nproc)"
 cd /tmp/build && ctest --output-on-failure
+if [ -n "$THEN" ]; then
+  echo "== $THEN =="
+  sh -c "$THEN"
+fi
 '

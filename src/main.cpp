@@ -34,7 +34,7 @@ fs::path fromUTF8(std::string_view text) {
 struct Options {
   fs::path data, screenshot, preferences, perf;
   bool headless = false, demo = false, race = false, validate = false, mute = false,
-       skipIntro = false, autosaveOnExit = false, loadAutosave = false;
+       skipIntro = false, skipIntroIfSeen = false, autosaveOnExit = false, loadAutosave = false;
   std::string movie, menu;
   int frames = 0, stage = 0, car = 0, camera = -1, graphics = -1, pauseAt = 0;
   // 0 or -1: not given on the command line.
@@ -56,6 +56,7 @@ void usage() {
                "  --screenshot PATH  Save the last rendered frame as BMP\n"
                "  --validate         Check all original resources and exit\n"
                "  --skip-intro       Open the menu without the intro movie\n"
+               "  --skip-intro-if-seen  Play the intro only on the first launch\n"
                "  --movie NAME.SMK   Play a movie directly\n"
                "  --menu PAGE        Preview main/players/controls/options/scores/loading\n"
                "  --prefs DIRECTORY  Separate portable preferences and profiles directory\n"
@@ -121,6 +122,8 @@ Options parse(int argc, char **argv) {
       o.validate = true;
     else if (a == "--skip-intro")
       o.skipIntro = true;
+    else if (a == "--skip-intro-if-seen")
+      o.skipIntroIfSeen = true;
     else if (a == "--movie")
       o.movie = value();
     else if (a == "--menu")
@@ -353,6 +356,10 @@ public:
         throw;
       error_ = e.what();
       page_ = Page::Error;
+#if A2_MIYOO
+      // The launcher keeps stderr in logs/latest.log.
+      std::cerr << "OpenA2: " << error_ << "\n";
+#endif
     }
     if (options_.loadAutosave && page_ != Page::Error && !options_.validate) {
       if (loadAutosave())
@@ -533,6 +540,10 @@ public:
     // Flush the autosave, settings and profiles: the device may be powered
     // off right after the Menu button.
     sync();
+    // Leaving from the error page (missing or broken game data) tells Onion
+    // and the launcher log that the game did not run.
+    if (page_ == Page::Error)
+      return 1;
 #endif
     return autosaveFailed ? 1 : 0;
   }
@@ -634,7 +645,7 @@ private:
     hasRace_ = false;
     if (options_.race || options_.demo)
       start(options_.stage, options_.car);
-    else if (!options_.skipIntro && !options_.validate && options_.menu.empty())
+    else if (!options_.skipIntro && !options_.validate && options_.menu.empty() && !introSeen())
       playMovie("A2INTRO.SMK", page_);
     if (!options_.menu.empty()) {
       const std::map<std::string, Page> screens{
@@ -651,6 +662,21 @@ private:
       exitAfterMovie_ = true;
       playMovie(options_.movie, Page::Main);
     }
+  }
+  // --skip-intro-if-seen: true when a marker in the preferences directory shows
+  // the intro was already started once; otherwise writes the marker.
+  bool introSeen() {
+    if (!options_.skipIntroIfSeen || saveDir_.empty())
+      return false;
+    const fs::path marker = saveDir_ / "intro-seen";
+    std::error_code ec;
+    if (fs::exists(marker, ec)) {
+      std::cout << "Intro: already seen, skipped\n";
+      return true;
+    }
+    std::ofstream(marker) << "The intro movie has been shown once.\n";
+    std::cout << "Intro: first launch, playing\n";
+    return false;
   }
   void playMovie(const std::string &name, Page after) {
     if (!data_->exists(name))
@@ -1428,8 +1454,13 @@ private:
     // key(SDLK_ESCAPE), which would leave the race without an autosave.
     auto context = miyooContextFor(*button, inRace, inRace && race_->fineDelay() > 0,
                                    page_ == Page::Movie);
-    for (auto command : down ? miyoo_.press(*button, context) : miyoo_.release(*button, context))
+    for (auto command : down ? miyoo_.press(*button, context) : miyoo_.release(*button, context)) {
+      // Without game data there is no race or menu: Menu (exit) is the only
+      // action, so quick load cannot run on a race that was never created.
+      if (page_ == Page::Error && command != MiyooCommand::Exit)
+        continue;
       miyooCommand(command);
+    }
   }
   void miyooCommand(MiyooCommand command) {
     switch (command) {
@@ -1635,8 +1666,14 @@ private:
       renderer_.text(42, 60, "OPEN A2", 0xffffd35a, 4);
       renderer_.text(42, 145, "ORIGINELE SPELGEGEVENS NODIG", 0xffded9ec, 2);
       renderer_.text(42, 195, error_, 0xffdddddd);
+#if A2_MIYOO
+      renderer_.text(42, 320, "COPY YOUR CD OR DISC IMAGE TO", 0xffffd35a, 2);
+      renderer_.text(42, 368, "ROMS/PORTS/GAMES/OPENA2RACERMINI/DATA");
+      renderer_.text(42, 400, "PRESS MENU TO RETURN TO ONION");
+#else
       renderer_.text(42, 320, "DROP YOUR CD FOLDER OR CD.ISO HERE", 0xffffd35a, 2);
       renderer_.text(42, 368, "OPENA2 --DATA /PATH/TO/CD");
+#endif
     } else if (page_ == Page::Loading) {
       renderer_.clear(0xff000000);
       menu_->loading();

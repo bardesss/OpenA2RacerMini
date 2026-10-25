@@ -1,0 +1,13 @@
+GameName="OpenA2RacerMini"
+GameDir="OpenA2RacerMini"
+GameExecutable="launch.sh"
+# Onion hides a port whose GameDataFile is missing. The game data can come in
+# five shapes (see launch.sh find_data), so no single data file exists for all
+# of them; launch.sh, which is always present, keeps the shortcut visible and
+# explains in logs/latest.log what is missing when there is no data.
+GameDataFile="launch.sh"
+KillAudioserver=1
+PerformanceMode=1
+# Extra game options, for example: Arguments="--world-scale 0.75"
+# See README.md in the port folder for the list.
+Arguments=""

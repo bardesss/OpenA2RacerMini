@@ -1,0 +1,32 @@
+OpenA2RacerMini - install on Onion OS (Miyoo Mini Plus / Mini Flip)
+=====================================================================
+
+1. Extract the release archive to the root of the SD card. It adds:
+     Roms/PORTS/Games/OpenA2RacerMini/     the game
+     Roms/PORTS/Imgs/OpenA2RacerMini.png   box art
+     Roms/PORTS/Shortcuts/Racing/OpenA2RacerMini.port
+
+2. Copy your own A2 Racer CD (Dutch release, Davilex 1997) to
+     Roms/PORTS/Games/OpenA2RacerMini/data/
+   in one of these forms:
+     data/CD/          the whole CD folder (RCS.IND, RCS.IMG, ETAPPE1.TRK, ... inside)
+     data/             the CD's files copied straight into data/
+     data/CD.iso       an ISO image (any name ending in .iso works)
+     data/track.bin    a raw BIN/CUE image (keep the .cue next to it)
+   Upper or lower case file names both work. The game files are about 114 MB.
+   This port contains no game files; you need your own CD.
+
+3. On the device, open Games > Ports and run "~Import ports" at the top of
+   the list. OpenA2RacerMini then appears in Ports.
+
+4. Start it. The intro movie plays on the first launch only.
+
+If the game does not start, look at
+  Roms/PORTS/Games/OpenA2RacerMini/logs/latest.log
+It says what data was looked for and where, or why the game stopped.
+
+Saves, profiles and settings are kept in
+  Roms/PORTS/Games/OpenA2RacerMini/saves/
+They are the same files as on the desktop OpenA2 and can be copied both ways.
+
+Controls, options and licences: see README.md in the same folder.

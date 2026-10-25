@@ -155,6 +155,11 @@ if(BUILD_TESTING)
       set_tests_properties(autosave_${A2_AUTOSAVE_MODE} PROPERTIES
         FIXTURES_REQUIRED a2_generated_data TIMEOUT 60)
     endforeach()
+    add_test(NAME intro_seen COMMAND "${CMAKE_COMMAND}"
+      -DOPENA2=$<TARGET_FILE:opena2> "-DDATA=${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
+      "-DPREFS=${CMAKE_CURRENT_BINARY_DIR}/intro_seen-prefs"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/intro_seen_test.cmake")
+    set_tests_properties(intro_seen PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT 60)
   endif()
 endif()
 

@@ -7,15 +7,30 @@
 # downloads nothing. The CMake and Ninja release archives are downloaded on the
 # host into a cache dir (resumable, shared by all gcc versions) and copied in.
 # --rebuild forces the helper image to be rebuilt (from the cached archives).
+# --game also builds the SDL game (A2_BUILD_GAME=ON) so the headless game tests
+# run. SDL2 comes from a tarball cached on the host (fetched once, checked
+# against the SHA-256 pinned in CMakeLists.txt) and is handed to FetchContent,
+# so the build downloads nothing. The images have no X11/ALSA headers; SDL
+# builds its dummy/offscreen drivers, which is all --headless needs.
 #
-# Usage: host-test.sh [--rebuild] [gcc-major-version]
+# Usage: host-test.sh [--rebuild] [--game] [gcc-major-version]
 # Env:   A2_HOSTTEST_CACHE  archive cache dir (default ~/.cache/opena2mini-hosttest)
 set -euo pipefail
 REBUILD=0
-if [ "${1:-}" = "--rebuild" ]; then REBUILD=1; shift; fi
+GAME=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --rebuild) REBUILD=1 ;;
+    --game) GAME=1 ;;
+    *) break ;;
+  esac
+  shift
+done
 VER="${1:-13}"
 CMAKE_VER=3.30.5
 NINJA_VER=1.12.1
+SDL2_VER=2.32.10
+SDL2_SHA256=5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165
 IMAGE="opena2mini-hosttest:gcc${VER}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CACHE="${A2_HOSTTEST_CACHE:-$HOME/.cache/opena2mini-hosttest}"
@@ -81,11 +96,31 @@ DOCKERFILE
   rm -rf "$CTX"
 fi
 
-exec docker run --rm -v "$ROOT:/src:ro" "$IMAGE" bash -c '
+GAME_ARGS="-DA2_BUILD_GAME=OFF"
+MOUNTS=(-v "$ROOT:/src:ro")
+if [ "$GAME" = 1 ]; then
+  SDL2_TGZ="SDL2-${SDL2_VER}.tar.gz"
+  fetch "$SDL2_TGZ" "https://www.libsdl.org/release/${SDL2_TGZ}"
+  if ! echo "$SDL2_SHA256  $CACHE/$SDL2_TGZ" | sha256sum -c --status; then
+    echo "SHA-256 mismatch for $CACHE/$SDL2_TGZ; deleting it" >&2
+    rm -f "$CACHE/$SDL2_TGZ"
+    exit 1
+  fi
+  MOUNTS+=(-v "$CACHE:/cache:ro")
+  GAME_ARGS="-DA2_BUILD_GAME=ON -DA2_USE_SYSTEM_SDL2=OFF -DFETCHCONTENT_SOURCE_DIR_SDL2=/tmp/sdl2/SDL2-${SDL2_VER}"
+fi
+
+exec docker run --rm "${MOUNTS[@]}" -e "GAME_ARGS=$GAME_ARGS" -e "SDL2_TGZ=${SDL2_TGZ:-}" "$IMAGE" bash -c '
 set -euo pipefail
 echo "== gcc $(gcc -dumpfullversion) =="
 cmake --version | head -1
-cmake -S /src -B /tmp/build -G Ninja -DA2_BUILD_GAME=OFF -DCMAKE_BUILD_TYPE=Release
+if [ -n "$SDL2_TGZ" ]; then
+  mkdir -p /tmp/sdl2
+  tar xzf "/cache/$SDL2_TGZ" -C /tmp/sdl2
+  python3 --version
+fi
+# GAME_ARGS is intentionally split into separate arguments.
+cmake -S /src -B /tmp/build -G Ninja $GAME_ARGS -DCMAKE_BUILD_TYPE=Release
 cmake --build /tmp/build -j"$(nproc)"
 cd /tmp/build && ctest --output-on-failure
 '

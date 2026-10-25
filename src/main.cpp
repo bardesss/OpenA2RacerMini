@@ -3,6 +3,7 @@
 #include "menu_art.hpp"
 #include "movie.hpp"
 #include "profiles.hpp"
+#include "save_slots.hpp"
 #include "scene.hpp"
 #include <SDL.h>
 #include <chrono>
@@ -22,9 +23,9 @@ fs::path fromUTF8(std::string_view text) {
 struct Options {
   fs::path data, screenshot, preferences;
   bool headless = false, demo = false, race = false, validate = false, mute = false,
-       skipIntro = false;
+       skipIntro = false, autosaveOnExit = false, loadAutosave = false;
   std::string movie, menu;
-  int frames = 0, stage = 0, car = 0, camera = -1, graphics = -1;
+  int frames = 0, stage = 0, car = 0, camera = -1, graphics = -1, pauseAt = 0;
 };
 void usage() {
   std::cout << "OpenA2 0.4.0 - native A2 Racer reconstruction\n"
@@ -45,6 +46,9 @@ void usage() {
                "  --menu PAGE        Preview main/players/controls/options/scores/loading\n"
                "  --prefs DIRECTORY  Separate portable preferences and profiles directory\n"
                "  --mute             Disable sound\n"
+               "  --load-autosave    Continue from the autosave slot\n"
+               "  --autosave-on-exit Write the autosave when --frames ends during a race\n"
+               "  --pause-at N       Pause the race after N frames (debugging)\n"
                "  --help             Show this help\n"
                "Original A2 Racer CD data is required, and is not included.\n";
 }
@@ -90,6 +94,12 @@ Options parse(int argc, char **argv) {
       o.preferences = value();
     else if (a == "--mute")
       o.mute = true;
+    else if (a == "--load-autosave")
+      o.loadAutosave = true;
+    else if (a == "--autosave-on-exit")
+      o.autosaveOnExit = true;
+    else if (a == "--pause-at")
+      o.pauseAt = integer(1, 10000000);
     else if (a == "--enhanced")
       o.graphics = 1;
     else if (a == "--classic")
@@ -257,6 +267,12 @@ public:
       error_ = e.what();
       page_ = Page::Error;
     }
+    if (options_.loadAutosave && page_ != Page::Error && !options_.validate) {
+      if (loadAutosave())
+        std::cout << "Autosave loaded: " << autosaveFile().string() << "\n";
+      else if (options_.headless)
+        throw std::runtime_error(message_);
+    }
   }
   ~App() {
     audio_.reset();
@@ -355,10 +371,23 @@ public:
       if (!options_.headless)
         present();
       ++frame;
+      if (options_.pauseAt && frame == options_.pauseAt && page_ == Page::Playing)
+        paused_ = true;
       if (options_.frames && frame >= options_.frames)
         quit_ = true;
       if (!options_.headless && !display_)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    // Debug stand-in for the Menu button: autosave only while in a race.
+    bool autosaveFailed = false;
+    if (options_.autosaveOnExit && hasRace_ && page_ == Page::Playing) {
+      if (saveAutosave())
+        std::cout << "Autosave written: " << autosaveFile().string() << " (paused " << paused_
+                  << ", fine " << race_->fineDelay() << ")\n";
+      else {
+        std::cerr << "OpenA2: " << message_ << "\n";
+        autosaveFailed = true;
+      }
     }
     if (!options_.screenshot.empty() && !renderer_.saveBMP(options_.screenshot))
       throw std::runtime_error("Could not save screenshot");
@@ -366,7 +395,7 @@ public:
       std::cout << "Frame " << frame << ", stage " << race_->stage() + 1 << ", distance "
                 << race_->player.distance << ", speed " << race_->player.speed << ", money "
                 << race_->player.money << "\n";
-    return 0;
+    return autosaveFailed ? 1 : 0;
   }
 
 private:
@@ -858,12 +887,18 @@ private:
           notify("SPEEL EERST DE VORIGE ETAPPE UIT");
         break;
       case Page::Slots:
+        // slot_ == -1 is the AUTOSAVE entry before slot 1, listed only while
+        // autosave.sav exists.
         if (selected_ == 0)
-          slot_ = (slot_ + 9) % 10;
+          slot_ = slot_ < 0 ? 9 : (slot_ == 0 && autosaveExists() ? -1 : (slot_ + 9) % 10);
         else if (selected_ == 1)
-          slot_ = (slot_ + 1) % 10;
+          slot_ = slot_ < 0 ? 0 : (slot_ == 9 && autosaveExists() ? -1 : (slot_ + 1) % 10);
+        else if (selected_ == 2 && slot_ < 0)
+          notify("KIES EEN SLOT OM OP TE SLAAN");
         else if (selected_ == 2)
           saveSlot(slot_);
+        else if ((selected_ == 3 || selected_ == 4) && slot_ < 0)
+          loadAutosave();
         else if (selected_ == 3)
           loadSlot(slot_);
         else if (selected_ == 4)
@@ -1444,8 +1479,11 @@ private:
         menu_->routeCard(std::clamp(selected_, 0, 5));
         addButton(MenuButton::Back, 0, 410, 6);
       } else if (page_ == Page::Slots) {
-        menu_->serifText(35, 125, "SLOT " + std::to_string(slot_ + 1), 0xffe5df58, 24);
-        const auto filename = saveFile(slot_);
+        if (slot_ < 0 && !autosaveExists())
+          slot_ = 0;
+        menu_->serifText(35, 125, slot_ < 0 ? "AUTOSAVE" : "SLOT " + std::to_string(slot_ + 1),
+                         0xffe5df58, 24);
+        const auto filename = slot_ < 0 ? autosaveFile() : saveFile(slot_);
         std::error_code ec;
         menu_->serifText(35, 157, fs::exists(filename, ec) ? "Opgeslagen spel" : "Leeg slot",
                          0xffffffff, 18);
@@ -1597,44 +1635,46 @@ private:
   fs::path saveFile(int slot, bool legacy = false) const {
     if (profiles_ && profiles_->active() && !legacy)
       return profiles_->savePath(slot);
-    return saveDir_ / ("slot" + std::to_string(slot) + ".sav");
+    return slotPath(saveDir_, {SlotKind::Manual, slot});
+  }
+  // One autosave for the installation, separate from every manual slot.
+  fs::path autosaveFile() const { return slotPath(saveDir_, {SlotKind::Autosave}); }
+  bool autosaveExists() const {
+    std::error_code ec;
+    return fs::exists(autosaveFile(), ec);
   }
   void saveSlot(int slot) {
+    saveRace([&] { return saveFile(slot); }, "OPGESLAGEN IN SLOT " + std::to_string(slot + 1));
+  }
+  bool saveAutosave() { return saveRace([&] { return autosaveFile(); }, "AUTOSAVE OPGESLAGEN"); }
+  template <class Target> bool saveRace(Target target, const std::string &done) {
     if (!hasRace_) {
       message_ = "START EERST EEN RACE";
       messageTime_ = 3;
-      return;
+      return false;
     }
+    std::string error;
+    bool saved = false;
     try {
-      auto target = saveFile(slot), temp = target;
-      fs::create_directories(target.parent_path());
-      temp += ".tmp";
-      {
-        std::ofstream f(temp);
-        if (!f)
-          throw std::runtime_error("Cannot create save file");
-        race_->save(f);
-        f.flush();
-        if (!f)
-          throw std::runtime_error("Cannot write save file");
-      }
-      std::error_code ec;
-      fs::rename(temp, target, ec);
-      if (ec) {
-        fs::copy_file(temp, target, fs::copy_options::overwrite_existing);
-        fs::remove(temp);
-      }
-      message_ = "OPGESLAGEN IN SLOT " + std::to_string(slot + 1);
+      saved = writeAtomically(
+          target(), [&](std::ostream &f) { race_->save(f); }, error);
     } catch (const std::exception &e) {
-      message_ = std::string("SAVE ERROR: ") + e.what();
+      error = e.what();
     }
+    message_ = saved ? done : "SAVE ERROR: " + error;
     messageTime_ = 3;
+    return saved;
   }
   void loadSlot(int slot, bool legacy = false) {
+    loadRace([&] { return saveFile(slot, legacy); }, "Slot is empty");
+  }
+  bool loadAutosave() { return loadRace([&] { return autosaveFile(); }, "No autosave"); }
+  template <class Source> bool loadRace(Source source, const char *empty) {
+    bool loaded = false;
     try {
-      std::ifstream f(saveFile(slot, legacy));
+      std::ifstream f(source());
       if (!f)
-        throw std::runtime_error("Slot is empty");
+        throw std::runtime_error(empty);
       loading();
       race_->load(f);
       if (profiles_ && profile() &&
@@ -1650,10 +1690,12 @@ private:
       paused_ = false;
       finishTime_ = 0;
       message_ = "SPEL GELADEN";
+      loaded = true;
     } catch (const std::exception &e) {
       message_ = std::string("LOAD ERROR: ") + e.what();
     }
     messageTime_ = 3;
+    return loaded;
   }
 };
 } // namespace a2

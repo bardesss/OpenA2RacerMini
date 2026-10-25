@@ -31,7 +31,7 @@ set_target_properties(a2smacker PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
 # Upstream uses plain char for negative status codes and signed bit-reader
 # results; retain those semantics on ARM toolchains whose default char is unsigned.
 target_compile_options(a2smacker PRIVATE "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-fsigned-char>")
-add_library(a2core STATIC src/assets.cpp src/simulation.cpp src/renderer.cpp src/scene.cpp src/movie.cpp src/guardrails.cpp src/hud.cpp src/texture.cpp src/graphics.cpp src/render_workers.cpp src/profiles.cpp src/menu_art.cpp)
+add_library(a2core STATIC src/assets.cpp src/simulation.cpp src/renderer.cpp src/scene.cpp src/movie.cpp src/guardrails.cpp src/hud.cpp src/texture.cpp src/graphics.cpp src/render_workers.cpp src/profiles.cpp src/menu_art.cpp src/save_slots.cpp)
 target_include_directories(a2core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_features(a2core PUBLIC cxx_std_${A2_CXX_STD})
 find_package(Threads REQUIRED)
@@ -110,7 +110,7 @@ endif()
 find_package(Python3 COMPONENTS Interpreter QUIET)
 include(CTest)
 if(BUILD_TESTING)
-  foreach(A2_TEST_NAME IN ITEMS assets simulation renderer movie legacy_geometry guardrails hud graphics profiles menu_art race_details police race_camera finish compat)
+  foreach(A2_TEST_NAME IN ITEMS assets simulation renderer movie legacy_geometry guardrails hud graphics profiles menu_art race_details police race_camera finish compat save_slots)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/${A2_TEST_NAME}_test.cpp")
       add_executable(${A2_TEST_NAME}_test tests/${A2_TEST_NAME}_test.cpp)
       target_link_libraries(${A2_TEST_NAME}_test PRIVATE a2core)
@@ -131,6 +131,14 @@ if(BUILD_TESTING)
       --headless --demo --enhanced --frames 420 --screenshot "${CMAKE_CURRENT_BINARY_DIR}/synthetic-enhanced.bmp")
     set_tests_properties(headless_enhanced_game PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT 60)
     set_tests_properties(headless_game PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT 30)
+    foreach(A2_AUTOSAVE_MODE IN ITEMS on_exit paused write_error)
+      add_test(NAME autosave_${A2_AUTOSAVE_MODE} COMMAND "${CMAKE_COMMAND}"
+        -DOPENA2=$<TARGET_FILE:opena2> "-DDATA=${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
+        "-DPREFS=${CMAKE_CURRENT_BINARY_DIR}/autosave_${A2_AUTOSAVE_MODE}-prefs"
+        -DMODE=${A2_AUTOSAVE_MODE} -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/autosave_test.cmake")
+      set_tests_properties(autosave_${A2_AUTOSAVE_MODE} PROPERTIES
+        FIXTURES_REQUIRED a2_generated_data TIMEOUT 60)
+    endforeach()
   endif()
 endif()
 

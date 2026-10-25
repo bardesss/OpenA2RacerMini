@@ -7,7 +7,7 @@ Status: ready for owner review
 
 OpenA2RacerMini is a fork of [openA2Racer](https://github.com/3dutchie/openA2Racer)
 (the open-source reimplementation of Davilex's A2 Racer, 1997, Dutch release)
-that runs natively on the **Miyoo Mini Plus under Onion OS**.
+that runs natively on the **Miyoo Mini Plus and Miyoo Mini Flip under Onion OS**.
 
 It is for two audiences, in this order:
 
@@ -48,9 +48,8 @@ compromising smoothness.
   Mario Kart 64 ports.
 - The desktop "enhanced" graphics mode (1280×960, edge AA, shadows, 2×
   textures). It is removed or compiled out on the device.
-- Supporting other handhelds (Miyoo Flip RK3566, A30, etc.). The Miyoo Mini
-  v1–v4 and Mini Flip share the same SoC and will likely work, but only the
-  Mini Plus is tested.
+- Supporting other handhelds (Miyoo Flip RK3566, A30, etc.). The original
+  Miyoo Mini v1–v4 shares the SoC and will likely work, but is not a target.
 - Becoming upstream openA2Racer. This is a separate fork.
 - Importing original Windows saves (upstream doesn't either).
 
@@ -99,6 +98,12 @@ release for real-data testing.
 ## Decided by the owner
 
 - **Name:** OpenA2RacerMini.
+- **Target devices: Miyoo Mini Plus and Miyoo Mini Flip** (same SSD202D
+  SoC, one build). The owner tests on a Mini Plus. The Flip needs a
+  volunteer tester before release notes claim it works; until then it is
+  listed as "expected to work, untested". Any Flip-specific differences
+  (screen, buttons, lid sleep) are handled at runtime, not with a second
+  build.
 - **Separate fork** of openA2Racer with its own repo and GitHub releases.
 - **Smoothness over looks**, but the best looks the budget allows.
 - **60 fps target, 30 fps hard floor.**

@@ -1,3 +1,65 @@
+# OpenA2RacerMini
+
+A port of [OpenA2](https://github.com/3dutchie/openA2Racer), the open-source
+reimplementation of **A2 Racer** (Davilex, 1997, Dutch release), to the
+**Miyoo Mini Plus** and **Miyoo Mini Flip** running **Onion OS**.
+
+Both devices use the same SigmaStar SSD202D chip, so one build runs on both.
+(The Rockchip-based *Miyoo Flip* and the *Miyoo A30* are different hardware
+and are not supported.)
+
+> **Status: in development. There is no release yet.** The design and
+> implementation plan are done; the Miyoo build is being worked on now.
+
+## Goals
+
+- The full game on the handheld: all six stages, cars, traffic, police, HUD,
+  music, sound, movies, profiles and saves.
+- Smooth racing first: **aiming for 60 fps, never below 30 fps**, with
+  immediate controls. Resolution adjusts dynamically to hold that; gameplay
+  is never changed for performance.
+- Installs like any other Onion port: extract the release to your SD card, add
+  your own game files, run `~Import ports`, play.
+
+## Game data
+
+This port contains **no A2 Racer game files** and never will. You need your
+own copy of the Dutch A2 Racer CD and copy its contents, or a disc image, to
+the SD card. Installation instructions follow with the first release.
+
+## Planned controls
+
+| Button | Action |
+| --- | --- |
+| D-pad | Steer / navigate menus |
+| A | Gas / confirm / dismiss fine / skip movie |
+| B | Brake and reverse / back |
+| R1 | Handbrake |
+| Y | Cycle camera (cockpit, chase, helicopter) |
+| X | Toggle radar |
+| Start | Pause / resume |
+| Select + Start | Restart stage |
+| Menu | In a race: autosave and return to Onion. Elsewhere: return to Onion |
+| Menu + R2 / Menu + L2 | Quick save / quick load |
+
+## Project documents
+
+- [Design](docs/superpowers/specs/2026-10-25-openA2RacerMini-design.md)
+- [Implementation plan](docs/superpowers/plans/2026-10-25-openA2RacerMini.md)
+
+## Relationship to OpenA2
+
+This repository is a fork of
+[3dutchie/openA2Racer](https://github.com/3dutchie/openA2Racer). Miyoo-specific
+code is kept separate (behind the `A2_MIYOO` build option and in
+`Packaging/miyoo_mini/`), so upstream fixes keep merging in and the desktop
+build stays the same as upstream. All credit for the engine reconstruction
+goes to the OpenA2 contributors. New code is MIT-licensed like upstream.
+
+The original OpenA2 README follows below, unchanged.
+
+---
+
 # OpenA2
 
 An open-source native reimplementation of **A2 Racer (1997, Dutch release)** for

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A fork of openA2Racer that builds in Docker on Windows and ships an Onion OS port archive running the full game on the Miyoo Mini Plus at 60 fps target / 30 fps hard floor.
+**Goal:** A fork of openA2Racer that builds in Docker on Windows and ships one Onion OS port archive running the full game on the Miyoo Mini Plus and Miyoo Mini Flip at 60 fps target / 30 fps hard floor.
 
 **Architecture:** Upstream source stays as-is except for small, guarded changes. Device-only code sits behind a CMake option `A2_MIYOO` (`#if A2_MIYOO`), and testable logic (button handling, save-slot paths, dynamic resolution, perf stats) lives in new SDL-free files in `a2core` with their own test executables. Everything Miyoo-specific for building and packaging lives in `Packaging/miyoo_mini/`, modelled on OpenRCT2mini.
 
@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Name: **OpenA2RacerMini**. Port folder: `Roms/PORTS/Games/OpenA2RacerMini/`.
+- Devices: **Miyoo Mini Plus and Miyoo Mini Flip**, one build (same SSD202D SoC). Mini Plus is tested by the owner; Mini Flip is "expected to work, untested" until a volunteer confirms it. Device differences are handled at runtime, never with a second build.
 - Fork base: `3dutchie/openA2Racer` commit `6a9ad018f1a9995c92e9a0d65f9da7edc3952514` (main, 2026-10-22).
 - Frame rate: **aim for 60 fps in races; 30 fps hard floor** (no sustained dips below 30) on every stage, in **all three cameras**, including the start grid, police chases and heavy traffic, with release defaults, on a real Mini Plus with real data.
 - **Gameplay never changes for performance**: traffic, rivals, police, physics, pickups and collidable objects stay as upstream. Only presentation may be reduced, in this order: (1) internal resolution, (2) view distance (never above the original 2,600 units), (3) distant *non-collidable* scenery.
@@ -332,6 +333,7 @@ Do these only after Task 11 meets its exit criterion. Each one is its own commit
 
 - [ ] **Step 1:** Workflow on push and tag `v*`: `host-test.sh 13`, `host-test.sh 8`, `build.sh`, `qemu-test.sh`, `package.sh`, `verify-package.sh`, `verify-launch.sh`, then upload the 7z as an artifact. On a tag, create a **draft** release with the 7z attached (the owner publishes).
 - [ ] **Step 2:** Push to a branch of the owner's fork (the owner creates the GitHub repo `OpenA2RacerMini`) and confirm the workflow is green.
+- [ ] **Step 2b: Mini Flip check.** Before Task 9, confirm the Flip's screen resolution, button keycodes and lid/sleep behaviour from Onion's source (`OnionUI/Onion`, device detection and keymap files) and record any differences in `bringup-notes.md`; add runtime handling if needed. For the release, find a volunteer Flip tester (catalog/Discord). Release notes say "Mini Flip: expected to work, untested" until one reports back.
 - [ ] **Step 3: Release checklist.** Fresh SD card install from the archive using only `README-MIYOO.md`, play stage 1 to the finish, Menu-exit, relaunch, load the autosave, quit. Record the result.
 - [ ] **Step 4:** Write `ports-json-entry.json` matching MiyooMini-Ports `ports.schema.json` (category Racing, assets "Owned data", status Prerelease until Task 11's criterion holds on every stage, then Playable; porter = owner) and hand it to the owner with the PR text.
 - [ ] **Step 5:** Commit: `ci: build, test and package the Miyoo port; release prep`.

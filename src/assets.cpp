@@ -1,5 +1,5 @@
 #include "assets.hpp"
-#include <bit>
+#include "compat.hpp"
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -34,7 +34,7 @@ std::string key(std::string name) {
   return name;
 }
 struct Reader {
-  std::span<const uint8_t> b;
+  span<const uint8_t> b;
   void need(size_t p, size_t n) const {
     if (p > b.size() || n > b.size() - p)
       fail("Truncated asset data");
@@ -53,7 +53,7 @@ struct Reader {
            uint32_t(b[p + 3]) << 24;
   }
   float f32(size_t p) const {
-    auto v = std::bit_cast<float>(u32(p));
+    auto v = bitCast<float>(u32(p));
     if (!std::isfinite(v))
       fail("Non-finite asset coordinate");
     return v;
@@ -226,7 +226,7 @@ Bytes GameData::read(const std::string &name) const {
 }
 bool GameData::exists(const std::string &name) const {
   auto n = key(name);
-  return sectorSize_ ? extents_.contains(n) : files_.contains(n);
+  return sectorSize_ ? a2::contains(extents_, n) : a2::contains(files_, n);
 }
 std::string GameData::description() const {
   return path_.string() + (sectorSize_ ? " (disc image)" : " (directory)");
@@ -250,11 +250,11 @@ Archive::Archive(const GameData &data, const std::string &stem) : blob_(data.rea
       fail("Duplicate archive member: " + name);
   }
 }
-std::span<const uint8_t> Archive::member(const std::string &name) const {
+span<const uint8_t> Archive::member(const std::string &name) const {
   auto it = members_.find(key(name));
   if (it == members_.end())
     fail("Missing archive member: " + name);
-  return std::span<const uint8_t>(blob_).subspan(it->second.first, it->second.second);
+  return span<const uint8_t>(blob_).subspan(it->second.first, it->second.second);
 }
 std::vector<std::string> Archive::names() const {
   std::vector<std::string> names;
@@ -263,10 +263,10 @@ std::vector<std::string> Archive::names() const {
   return names;
 }
 bool Archive::contains(const std::string &name) const {
-  return members_.contains(key(name));
+  return a2::contains(members_, key(name));
 }
 
-Image decodePCX(std::span<const uint8_t> bytes) {
+Image decodePCX(span<const uint8_t> bytes) {
   Reader r{bytes};
   r.need(0, 128 + 769);
   if (r.u8(0) != 10 || r.u8(2) != 1 || r.u8(3) != 8 || r.u8(65) != 1 ||
@@ -312,7 +312,7 @@ Image decodePCX(std::span<const uint8_t> bytes) {
   }
   return out;
 }
-Mesh decodeMesh(std::span<const uint8_t> bytes) {
+Mesh decodeMesh(span<const uint8_t> bytes) {
   Reader r{bytes};
   uint32_t nv = r.u32(0), nf = r.u32(4);
   if (nv == 0 || nv > 65536 || nf > 1000000 ||
@@ -338,7 +338,7 @@ Mesh decodeMesh(std::span<const uint8_t> bytes) {
   }
   return mesh;
 }
-Sound decodeWAV(std::span<const uint8_t> bytes) {
+Sound decodeWAV(span<const uint8_t> bytes) {
   Reader r{bytes};
   r.need(0, 12);
   if (!r.tag(0, "RIFF") || !r.tag(8, "WAVE"))
@@ -348,7 +348,7 @@ Sound decodeWAV(std::span<const uint8_t> bytes) {
     fail("Invalid RIFF size");
   unsigned channels = 0, bits = 0, rate = 0, align = 0;
   bool haveFmt = false, haveData = false;
-  std::span<const uint8_t> pcm;
+  span<const uint8_t> pcm;
   for (size_t p = 12; p < end;) {
     if (end - p < 8)
       fail("Truncated WAV chunk header");
@@ -392,7 +392,7 @@ Sound decodeWAV(std::span<const uint8_t> bytes) {
     for (size_t c = 0; c < channels; ++c) {
       size_t p = i * align + c * (bits / 8);
       sample += bits == 8 ? (float(pr.u8(p)) - 128.f) / 128.f
-                          : float(std::bit_cast<int16_t>(pr.u16(p))) / 32768.f;
+                          : float(bitCast<int16_t>(pr.u16(p))) / 32768.f;
     }
     out.samples[i] = sample / float(channels);
   }
@@ -417,8 +417,8 @@ std::vector<Sprite> decodeSprites(const GameData &data, const std::string &stem,
     if (end - start != 8 + size)
       fail("Invalid sprite raster size");
     Sprite s;
-    s.hotspotX = std::bit_cast<int16_t>(br.u16(start + 4));
-    s.hotspotY = std::bit_cast<int16_t>(br.u16(start + 6));
+    s.hotspotX = bitCast<int16_t>(br.u16(start + 4));
+    s.hotspotY = bitCast<int16_t>(br.u16(start + 6));
     s.image.width = w;
     s.image.height = h;
     s.image.palette = palette;

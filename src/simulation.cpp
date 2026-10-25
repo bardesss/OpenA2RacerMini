@@ -1,5 +1,5 @@
 #include "simulation.hpp"
-#include <bit>
+#include "compat.hpp"
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -52,15 +52,15 @@ uint64_t trackFingerprint(const Track &t) {
   word(uint32_t(t.road.size()));
   word(uint32_t(t.placements.size()));
   for (const auto &r : t.road) {
-    word(std::bit_cast<uint32_t>(r.center.x));
-    word(std::bit_cast<uint32_t>(r.center.y));
+    word(bitCast<uint32_t>(r.center.x));
+    word(bitCast<uint32_t>(r.center.y));
     for (auto f : r.fields)
       word(f);
   }
   for (const auto &p : t.placements) {
     for (auto f : p.fields)
       word(f);
-    word(std::bit_cast<uint32_t>(p.value));
+    word(bitCast<uint32_t>(p.value));
   }
   return value;
 }

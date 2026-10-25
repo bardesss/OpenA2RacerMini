@@ -1,5 +1,5 @@
 #include "assets.hpp"
-#include <bit>
+#include "compat.hpp"
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -31,7 +31,7 @@ void put32(Bytes &b, size_t p, uint32_t v) {
     b.at(p + i) = uint8_t(v >> (8 * i));
 }
 void putFloat(Bytes &b, size_t p, float v) {
-  put32(b, p, std::bit_cast<uint32_t>(v));
+  put32(b, p, bitCast<uint32_t>(v));
 }
 void tag(Bytes &b, size_t p, const char *text) {
   for (size_t i = 0; i < 4; ++i)
@@ -157,10 +157,10 @@ void unitTests() {
   put16(bad, 20, 6);
   rejects([&] { decodeWAV(bad); }, "Compressed WAV accepted");
   for (size_t n = 0; n < mesh.size(); ++n)
-    rejects([&] { decodeMesh(std::span<const uint8_t>(mesh).first(n)); },
+    rejects([&] { decodeMesh(span<const uint8_t>(mesh).first(n)); },
             "Truncated mesh accepted");
   for (size_t n = 0; n < 58; ++n)
-    rejects([&] { decodeWAV(std::span<const uint8_t>(wave).first(n)); }, "Truncated WAV accepted");
+    rejects([&] { decodeWAV(span<const uint8_t>(wave).first(n)); }, "Truncated WAV accepted");
   rejects([] { decodePCX({}); }, "Empty PCX accepted");
   rejects([] { GameData("path-that-does-not-exist-a2-tests"); }, "Missing data accepted");
   TempDir fixture;
@@ -242,15 +242,15 @@ void originalTests(const std::filesystem::path &path) {
   size_t pcx = 0, wav = 0, meshes = 0, vertices = 0, faces = 0;
   for (const auto *archive : {&race, &menu})
     for (const auto &name : archive->names()) {
-      if (name.ends_with(".pcx")) {
+      if (endsWith(name, ".pcx")) {
         auto im = decodePCX(archive->member(name));
         check(im.pixels.size() == size_t(im.width) * im.height, "Decoded PCX pixel count");
         ++pcx;
-      } else if (name.ends_with(".wav")) {
+      } else if (endsWith(name, ".wav")) {
         auto s = decodeWAV(archive->member(name));
         check(s.sampleRate == 11025 || s.sampleRate == 22050, "Original sample rate");
         ++wav;
-      } else if (name.ends_with(".d3d")) {
+      } else if (endsWith(name, ".d3d")) {
         auto m = decodeMesh(archive->member(name));
         vertices += m.vertices.size();
         faces += m.faces.size();

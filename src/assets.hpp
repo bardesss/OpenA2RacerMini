@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
-#include <span>
+#include "compat.hpp"
 
 namespace a2 {
 using Bytes = std::vector<uint8_t>;
@@ -27,7 +27,7 @@ private:
 class Archive {
 public:
   Archive(const GameData &data, const std::string &stem);
-  std::span<const uint8_t> member(const std::string &name) const;
+  span<const uint8_t> member(const std::string &name) const;
   std::vector<std::string> names() const;
   bool contains(const std::string &name) const;
 
@@ -35,9 +35,9 @@ private:
   Bytes blob_;
   std::map<std::string, std::pair<size_t, size_t>> members_;
 };
-Image decodePCX(std::span<const uint8_t> bytes);
-Mesh decodeMesh(std::span<const uint8_t> bytes);
-Sound decodeWAV(std::span<const uint8_t> bytes);
+Image decodePCX(span<const uint8_t> bytes);
+Mesh decodeMesh(span<const uint8_t> bytes);
+Sound decodeWAV(span<const uint8_t> bytes);
 std::vector<Sprite> decodeSprites(const GameData &data, const std::string &stem,
                                   const std::array<uint32_t, 256> &palette);
 Track loadTrack(const GameData &data, int number);

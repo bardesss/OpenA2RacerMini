@@ -1,4 +1,5 @@
 #include "scene.hpp"
+#include "compat.hpp"
 #include <iostream>
 #include <set>
 #include <sstream>
@@ -167,7 +168,7 @@ void impactsAndSaves(const std::array<Track, 3> &tracks) {
   original.roadProps.clear();
   std::string legacy = snapshot(original);
   legacy.replace(13, 1, "1");
-  check(legacy.ends_with("0\n0 0\n0\n0\nEND\n"), "Migration fixture ends in empty v2/v3/v4 extensions");
+  check(endsWith(legacy, "0\n0 0\n0\n0\nEND\n"), "Migration fixture ends in empty v2/v3/v4 extensions");
   legacy.erase(legacy.size() - 14, 10);
   Race restored(tracks);
   std::istringstream old(legacy);

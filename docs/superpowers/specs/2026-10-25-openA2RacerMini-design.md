@@ -83,8 +83,8 @@ C++20 library feature found so far is `std::bit_cast` in `src/assets.cpp`.
 GCC 8 also needs `-lstdc++fs` for `<filesystem>`. Exact remaining
 incompatibilities are only known after a first compile.
 
-**Data size.** A CD image is ~700–800 MB; trivial on typical 32–128 GB cards
-and under FAT32's 4 GB limit.
+**Data size.** The A2 Racer CD holds about 114 MB of data (measured by the
+owner); trivial on typical 32–128 GB cards and far under FAT32's 4 GB limit.
 
 **Licensing.** New code MIT. libsmacker is LGPL-2.1 and statically linked
 upstream; releases must keep shipping its source/relink archive (upstream's

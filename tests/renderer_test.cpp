@@ -1,5 +1,6 @@
 #include "renderer.hpp"
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -253,6 +254,75 @@ void spriteTransparency() {
   check(pixel(renderer, 0, 0) == black && pixel(renderer, 1, 0) == blue,
         "Scaled index255 sprite clipping");
 }
+void depthScene(Renderer &r) {
+  auto c = camera();
+  r.clear(black);
+  screenTriangle(r, c, 8, blue);
+  screenTriangle(r, c, 2, red);
+  r.triangle(c, projected(c, 300, 50, 5), projected(c, 620, 300, 5), projected(c, 250, 460, 5),
+             nullptr, green);
+  r.finishWorld();
+}
+void worldScaleOneIsIdentical() {
+  Renderer reference, scaled;
+  depthScene(reference);
+  scaled.setWorldScale(.5f);
+  depthScene(scaled);
+  scaled.setWorldScale(1.0f);
+  check(scaled.worldScale() == 1.0f && scaled.worldWidth() == 640 && scaled.worldHeight() == 480,
+        "World scale 1.0 must use the full 640x480 world");
+  depthScene(scaled);
+  check(scaled.pixels() == reference.pixels(), "World scale 1.0 changed the rendered pixels");
+}
+void worldScaleHalfCoversSameArea() {
+  auto covered = [](const Renderer &r) {
+    size_t count = 0;
+    for (uint32_t c : r.pixels())
+      count += ((c >> 16) & 255) >= 128;
+    return count;
+  };
+  Renderer full, half;
+  auto c = camera();
+  full.clear(black);
+  screenTriangle(full, c, 5, red);
+  full.finishWorld();
+  half.setWorldScale(.5f);
+  check(half.worldWidth() == 320 && half.worldHeight() == 240, "Half world size");
+  half.clear(black);
+  screenTriangle(half, c, 5, red);
+  half.finishWorld();
+  check(half.pixels().size() == size_t(Renderer::width) * Renderer::height,
+        "Scaled world must upscale into the full 640x480 frame");
+  check(pixel(half, 200, 200) == red, "Scaled world lost the triangle interior");
+  check(pixel(half, 600, 450) == black, "Scaled world covered the background");
+  const double a = double(covered(full)), b = double(covered(half));
+  check(a > 0 && std::abs(a - b) <= a * .02, "Scaled world changed the covered area");
+}
+void hudSharpAfterScaledWorld() {
+  Renderer r;
+  auto c = camera();
+  r.setWorldScale(.5f);
+  r.clear(black);
+  screenTriangle(r, c, 5, red);
+  r.finishWorld();
+  r.rect(10, 10, 1, 1, green);
+  check(pixel(r, 10, 10) == green && pixel(r, 11, 10) != green && pixel(r, 10, 11) != green,
+        "HUD must draw at full resolution after a scaled world");
+}
+void scaleClamped() {
+  Renderer r;
+  check(r.worldScale() == 1.0f, "Default world scale");
+  r.setWorldScale(.1f);
+  check(r.worldScale() == .5f, "World scale must clamp to 0.5");
+  r.setWorldScale(2.f);
+  check(r.worldScale() == 1.0f, "World scale must clamp to 1.0");
+  r.setWorldScale(.75f);
+  check(r.worldWidth() == 480 && r.worldHeight() == 360, "World size rounds 640/480 * scale");
+  r.setEnhanced(true);
+  check(r.worldScale() == 1.0f, "Enhanced mode must reset the world scale");
+  r.setWorldScale(.5f);
+  check(r.worldScale() == 1.0f, "World scale must be ignored while enhanced");
+}
 } // namespace
 int main() {
   try {
@@ -265,8 +335,12 @@ int main() {
     blitting();
     spriteTransparency();
     bmp();
+    worldScaleOneIsIdentical();
+    worldScaleHalfCoversSameArea();
+    hudSharpAfterScaledWorld();
+    scaleClamped();
     std::cout << "Renderer checks passed: depth, perspective, clip, mask, wrapping, large "
-                 "coordinates, blit, BMP\n";
+                 "coordinates, blit, BMP, world scale\n";
     return 0;
   } catch (const std::exception &e) {
     std::cerr << "Renderer test failed: " << e.what() << '\n';

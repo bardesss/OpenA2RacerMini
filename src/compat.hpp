@@ -3,12 +3,27 @@
 #include <cstring>
 #include <string>
 #include <type_traits>
-#if __cplusplus > 201703L && __has_include(<span>)
+// Feature-test macros: <version> exists from GCC 9 / Clang 7 / MSVC 2019.
+// Without it (GCC 8) none of the C++20 library features below are assumed.
+#if defined(__has_include)
+#if __has_include(<version>)
+#include <version>
+#endif
+#endif
+#if defined(__cpp_lib_span)
 #include <span>
+#endif
+#if defined(__cpp_lib_bit_cast)
+#include <bit>
 #endif
 
 namespace a2 {
-// memcpy-based std::bit_cast replacement for compilers without <bit> (GCC 8).
+#if defined(__cpp_lib_bit_cast)
+template <class To, class From> constexpr To bitCast(const From &from) noexcept {
+  return std::bit_cast<To>(from);
+}
+#else
+// memcpy-based std::bit_cast replacement (GCC 8).
 template <class To, class From> To bitCast(const From &from) noexcept {
   static_assert(sizeof(To) == sizeof(From), "bitCast requires equal sizes");
   static_assert(std::is_trivially_copyable<To>::value && std::is_trivially_copyable<From>::value,
@@ -17,8 +32,9 @@ template <class To, class From> To bitCast(const From &from) noexcept {
   std::memcpy(&to, &from, sizeof(To));
   return to;
 }
+#endif
 
-#if __cplusplus > 201703L && __has_include(<span>)
+#if defined(__cpp_lib_span)
 template <class T> using span = std::span<T>;
 #else
 // Minimal dynamic-extent std::span stand-in for C++17 toolchains (GCC 8).
@@ -52,6 +68,10 @@ private:
 template <class Map, class Key> bool contains(const Map &m, const Key &k) { return m.find(k) != m.end(); }
 // std::string::ends_with (C++20) for C++17 toolchains.
 inline bool endsWith(const std::string &s, const std::string &suffix) {
+#if defined(__cpp_lib_starts_ends_with)
+  return s.ends_with(suffix);
+#else
   return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+#endif
 }
 } // namespace a2

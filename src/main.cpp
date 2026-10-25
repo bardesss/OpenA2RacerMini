@@ -968,7 +968,13 @@ private:
       SDL_Scancode code = SDL_GetScancodeFromKey(key);
       if (code == SDL_SCANCODE_UNKNOWN)
         return;
+#if A2_MIYOO
+      // SPACE (A) is the default gas key and must stay bindable. On the device
+      // no game function reads SPACE through key(); Confirm sends RETURN.
+      if (key == SDLK_RETURN || key == SDLK_p || key == SDLK_g ||
+#else
       if (key == SDLK_RETURN || key == SDLK_SPACE || key == SDLK_p || key == SDLK_g ||
+#endif
           key == SDLK_m || key == SDLK_r || (key >= SDLK_F1 && key <= SDLK_F12) ||
           (key >= SDLK_1 && key <= SDLK_9) || (key >= SDLK_KP_1 && key <= SDLK_KP_9)) {
         notify("DEZE TOETS IS GERESERVEERD VOOR EEN SPELFUNCTIE");
@@ -1256,18 +1262,6 @@ private:
                     SDL_SCANCODE_ESCAPE == 41,
                 "SDL scancodes differ from the Miyoo button table");
   MiyooControls miyoo_;
-  MiyooContext miyooContext(MiyooButton b) const {
-    if (page_ == Page::Movie)
-      return MiyooContext::Movie;
-    if (page_ != Page::Playing)
-      return MiyooContext::Menu;
-    // Fine dialog: A confirms (upstream dismiss). Menu and its L2/R2 combos
-    // stay in the race, so Menu still autosaves.
-    if (race_->fineDelay() > 0 && b != MiyooButton::Menu && b != MiyooButton::L2 &&
-        b != MiyooButton::R2)
-      return MiyooContext::Menu;
-    return MiyooContext::Race;
-  }
   void miyooKey(SDL_Scancode code, SDL_Keycode sym, bool down) {
     // BEDIENING key binding takes the raw key, as on the desktop.
     if (down && binding_ >= 0) {
@@ -1277,7 +1271,11 @@ private:
     auto button = miyooButtonFromScancode(int(code));
     if (!button)
       return;
-    auto context = miyooContext(*button);
+    const bool inRace = page_ == Page::Playing;
+    // Fine dialog: only A/Start confirm; B and the D-pad must not reach
+    // key(SDLK_ESCAPE), which would leave the race without an autosave.
+    auto context = miyooContextFor(*button, inRace, inRace && race_->fineDelay() > 0,
+                                   page_ == Page::Movie);
     for (auto command : down ? miyoo_.press(*button, context) : miyoo_.release(*button, context))
       miyooCommand(command);
   }

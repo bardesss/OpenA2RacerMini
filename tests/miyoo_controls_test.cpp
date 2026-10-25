@@ -97,6 +97,27 @@ void fineDialog() {
   MiyooControls c;
   check(c.press(B::A, menu) == Commands{C::Confirm}, "A must dismiss the fine dialog");
 }
+void contextFor() {
+  check(miyooContextFor(B::A, false, false, true) == movie, "Movie page is not Movie context");
+  check(miyooContextFor(B::A, false, false, false) == menu, "Menu page is not Menu context");
+  check(miyooContextFor(B::B, true, false, false) == race, "Race page is not Race context");
+  // Fine dialog: A and Start confirm, Menu and its combos stay in the race.
+  for (B b : {B::A, B::Start})
+    check(miyooContextFor(b, true, true, false) == menu, "Fine dialog A/Start not Menu context");
+  for (B b : {B::Menu, B::L2, B::R2})
+    check(miyooContextFor(b, true, true, false) == race, "Fine dialog Menu/L2/R2 not Race");
+  // B (brake) and the D-pad must not leave the race or move anything.
+  MiyooControls c;
+  for (B b : {B::B, B::Up, B::Down, B::Left, B::Right})
+    check(tap(c, b, miyooContextFor(b, true, true, false)).empty(),
+          "Fine dialog B/D-pad emitted a command");
+  check(tap(c, B::A, miyooContextFor(B::A, true, true, false)) == Commands{C::Confirm},
+        "Fine dialog A does not confirm");
+  c.press(B::Menu, miyooContextFor(B::Menu, true, true, false));
+  check(c.release(B::Menu, miyooContextFor(B::Menu, true, true, false)) ==
+            Commands{C::AutosaveAndExit},
+        "Menu during a fine dialog does not autosave");
+}
 void releaseWithoutPress() {
   // A Menu still held from before the game started must not exit on release.
   MiyooControls c;
@@ -125,6 +146,7 @@ int main() {
     menuContext();
     movieContext();
     fineDialog();
+    contextFor();
     releaseWithoutPress();
     scancodes();
     std::cout << "Miyoo controls: race, menu and movie buttons, Select+Start, Menu combos and "

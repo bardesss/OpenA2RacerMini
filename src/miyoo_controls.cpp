@@ -72,6 +72,16 @@ std::vector<MiyooCommand> MiyooControls::release(MiyooButton b, MiyooContext con
   return {context == MiyooContext::Race ? MiyooCommand::AutosaveAndExit : MiyooCommand::Exit};
 }
 
+MiyooContext miyooContextFor(MiyooButton b, bool inRace, bool fineShowing, bool inMovie) {
+  if (inMovie)
+    return MiyooContext::Movie;
+  if (!inRace)
+    return MiyooContext::Menu;
+  if (fineShowing && (b == MiyooButton::A || b == MiyooButton::Start))
+    return MiyooContext::Menu;
+  return MiyooContext::Race;
+}
+
 std::optional<MiyooButton> miyooButtonFromScancode(int sdlScancode) {
   using B = MiyooButton;
   switch (sdlScancode) {

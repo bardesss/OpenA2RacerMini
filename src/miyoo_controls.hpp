@@ -7,10 +7,8 @@
 namespace a2 {
 // Physical buttons of the Miyoo Mini Plus / Mini Flip.
 enum class MiyooButton { Up, Down, Left, Right, A, B, X, Y, L1, L2, R1, R2, Start, Select, Menu };
-// Race = Page::Playing, including paused. The glue passes Menu instead of Race
-// while a fine dialog is open (MiyooControls does not know about fines), so A
-// dismisses it with Confirm. The Menu button and its L2/R2 combos keep the
-// Race context during the fine dialog, so Menu still autosaves.
+// Race = Page::Playing, including paused and the fine dialog. MiyooControls
+// does not know about fines; miyooContextFor() below picks the context.
 enum class MiyooContext { Race, Menu, Movie };
 enum class MiyooCommand {
   Up,
@@ -52,6 +50,13 @@ private:
   std::array<bool, size_t(MiyooButton::Menu) + 1> held_{};
   bool menuCombo_ = false;
 };
+
+// Context for one button: Movie while a movie plays, Menu outside a race.
+// In a race with a fine dialog showing, A and Start get Menu (Confirm
+// dismisses the fine). Every other button stays Race: Menu and L2/R2 still
+// autosave / quick save, and B (brake) and the D-pad emit nothing, so they
+// can't leave the race.
+MiyooContext miyooContextFor(MiyooButton, bool inRace, bool fineShowing, bool inMovie);
 
 // Maps an SDL2 SDL_SCANCODE_* value of the Miyoo evdev keyboard to a button.
 // Plain int keeps the core SDL-free.

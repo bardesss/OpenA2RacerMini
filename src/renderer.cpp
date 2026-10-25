@@ -15,6 +15,12 @@ void Camera::lookAt(Vec3 eye, Vec3 target) {
 }
 Renderer::Renderer() : color_(width * height), depth_(width * height) {}
 void Renderer::clear(uint32_t color) {
+  if (worldDirect_) {
+    worldDirect_ = false;
+    worldW_ = worldWidth();
+    worldH_ = worldHeight();
+    depth_.resize(size_t(worldW_) * worldH_);
+  }
   if (scaledWorld()) {
     std::fill(world_.begin(), world_.end(), color);
     worldPending_ = true;
@@ -45,9 +51,20 @@ void Renderer::setWorldScale(float scale) {
   world_.resize(scaledWorld() ? size_t(worldW_) * worldH_ : 0);
   depth_.resize(size_t(worldW_) * worldH_);
   worldPending_ = false;
+  worldDirect_ = false;
   commands_.clear();
   for (auto &band : bands_)
     band.clear();
+}
+void Renderer::drawWorldDirect() {
+  // The reduced world is already in the frame (or was never armed by clear()),
+  // so later world draws go to the full-size frame; depth restarts empty there,
+  // as everything already in the frame is behind them. clear() switches back.
+  worldDirect_ = true;
+  worldW_ = width;
+  worldH_ = height;
+  depth_.resize(size_t(width) * height);
+  std::fill(depth_.begin(), depth_.end(), 0);
 }
 // Blends 8-bit channels as two 16-bit lanes; f is the weight of b, 0..256.
 static inline uint32_t lerpPixel(uint32_t a, uint32_t b, uint32_t f) {
@@ -103,6 +120,7 @@ void Renderer::resolveWorld() {
   });
 }
 void Renderer::background(const Image &sky, float heading, float horizon) {
+  beginWorldDraw();
   const int width = worldW_, height = worldH_;
   // Exactly 1 or 2 (the enhanced scale) unless the world scale is reduced.
   const float rowScale = float(worldH_) / Renderer::height;
@@ -144,6 +162,7 @@ static uint32_t shade(uint32_t c, float l, float fog, uint32_t tint) {
 }
 void Renderer::triangle(const Camera &cam, DrawVertex a, DrawVertex b, DrawVertex c,
                         const Image *texture, uint32_t color, bool mask, float light, bool blend) {
+  beginWorldDraw();
   const int width = worldW_, height = worldH_;
   // The focal length follows the world size: x2 enhanced, x(worldWidth/640) scaled.
   const float focal = cam.focal * (float(worldW_) / Renderer::width);

@@ -2,6 +2,7 @@
 #include "guardrails.hpp"
 #include "legacy_geometry.hpp"
 #include "race_camera.hpp"
+#include <algorithm>
 #include <cstdio>
 
 namespace a2 {
@@ -42,6 +43,8 @@ void Scene::draw(const Race &race, int view, bool radar, bool horizon, bool dash
   const float intro = race.introCountdown();
   Camera cam = raceCamera(p, f, view, intro);
   cam.farPlane = renderer_.enhanced() ? 7800 : 2600;
+  if (viewDistance_ > 0)
+    cam.farPlane = std::min(cam.farPlane, viewDistance_);
   renderer_.clear(0xff628194);
   if (horizon)
     renderer_.background(assets_.image("Sky.pcx"), yawOf(f), 240 + cam.forward.y * cam.focal);

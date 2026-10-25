@@ -1,7 +1,9 @@
 #include "assets.hpp"
 #include "audio.hpp"
+#include "dynamic_resolution.hpp"
 #include "menu_art.hpp"
 #include "movie.hpp"
+#include "perf_stats.hpp"
 #include "profiles.hpp"
 #include "save_slots.hpp"
 #include "scene.hpp"
@@ -30,11 +32,14 @@ fs::path fromUTF8(std::string_view text) {
 #endif
 }
 struct Options {
-  fs::path data, screenshot, preferences;
+  fs::path data, screenshot, preferences, perf;
   bool headless = false, demo = false, race = false, validate = false, mute = false,
        skipIntro = false, autosaveOnExit = false, loadAutosave = false;
   std::string movie, menu;
   int frames = 0, stage = 0, car = 0, camera = -1, graphics = -1, pauseAt = 0;
+  // 0 or -1: not given on the command line.
+  double worldScale = 0, viewDistance = 0;
+  int dynamicResolution = -1, vsync = -1;
 };
 void usage() {
   std::cout << "OpenA2 0.4.0 - native A2 Racer reconstruction\n"
@@ -58,6 +63,11 @@ void usage() {
                "  --load-autosave    Continue from the autosave slot\n"
                "  --autosave-on-exit Write the autosave when --frames ends during a race\n"
                "  --pause-at N       Pause the race after N frames (debugging)\n"
+               "  --perf FILE        Append a CSV row per frame and print fps stats on exit\n"
+               "  --world-scale S    Fixed race world resolution scale 0.5..1 (no dynamic)\n"
+               "  --dynamic-resolution on|off  Lower the race world resolution when slow\n"
+               "  --view-distance N  Race view distance in units, at most 2600\n"
+               "  --vsync on|off     Wait for the display refresh (default on)\n"
                "  --help             Show this help\n"
                "Original A2 Racer CD data is required, and is not included.\n";
 }
@@ -77,6 +87,22 @@ Options parse(int argc, char **argv) {
       if (n != s.size() || v < low || v > high)
         throw std::runtime_error("Invalid value for " + a);
       return v;
+    };
+    auto number = [&](double low, double high) {
+      auto s = value();
+      size_t n = 0;
+      double v = std::stod(s, &n);
+      if (n != s.size() || !(v >= low && v <= high))
+        throw std::runtime_error("Invalid value for " + a);
+      return v;
+    };
+    auto onOff = [&]() {
+      auto s = value();
+      if (s == "on")
+        return 1;
+      if (s == "off")
+        return 0;
+      throw std::runtime_error("Invalid value for " + a + " (on or off)");
     };
     if (a == "--help" || a == "-h") {
       usage();
@@ -109,6 +135,16 @@ Options parse(int argc, char **argv) {
       o.autosaveOnExit = true;
     else if (a == "--pause-at")
       o.pauseAt = integer(1, 10000000);
+    else if (a == "--perf")
+      o.perf = value();
+    else if (a == "--world-scale")
+      o.worldScale = number(.5, 1);
+    else if (a == "--dynamic-resolution")
+      o.dynamicResolution = onOff();
+    else if (a == "--view-distance")
+      o.viewDistance = number(1, 2600);
+    else if (a == "--vsync")
+      o.vsync = onOff();
     else if (a == "--enhanced")
       o.graphics = 1;
     else if (a == "--classic")
@@ -225,12 +261,21 @@ public:
       SDL_SetMainReady();
       if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_TIMER) != 0)
         throw std::runtime_error(SDL_GetError());
+#if A2_MIYOO
+      // The device screen is 640x480: the frame maps 1:1, always fullscreen.
+      settings_.fullscreen = true;
+      window_ = SDL_CreateWindow("OpenA2 - A2 Racer", SDL_WINDOWPOS_UNDEFINED,
+                                 SDL_WINDOWPOS_UNDEFINED, 640, 480, SDL_WINDOW_FULLSCREEN);
+#else
       window_ = SDL_CreateWindow("OpenA2 - A2 Racer", SDL_WINDOWPOS_CENTERED,
                                  SDL_WINDOWPOS_CENTERED, 960, 720, SDL_WINDOW_RESIZABLE);
+#endif
       if (!window_)
         throw std::runtime_error(SDL_GetError());
-      display_ =
-          SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+      // --vsync defaults to on; Task 9 picks the device default.
+      display_ = SDL_CreateRenderer(
+          window_, -1,
+          SDL_RENDERER_ACCELERATED | (options_.vsync != 0 ? SDL_RENDERER_PRESENTVSYNC : 0));
       if (!display_)
         display_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_SOFTWARE);
       if (!display_)
@@ -267,13 +312,40 @@ public:
       if (profiles_->selected() >= 0)
         profileRow_ = profiles_->selected();
     }
+#if A2_MIYOO
+    // Enhanced graphics are unavailable on the device, even from a copied
+    // desktop settings file or --enhanced.
+    settings_.enhanced = false;
+#endif
     draft_ = settings_;
     settings_.mute = options_.mute || settings_.mute;
     if (options_.camera >= 0)
       settings_.camera = options_.camera;
+#if !A2_MIYOO
     if (options_.graphics >= 0)
       settings_.enhanced = options_.graphics != 0;
+#endif
     renderer_.setEnhanced(settings_.enhanced);
+    // A fixed --world-scale disables the dynamic resolution. Otherwise it is
+    // on by default on the device only, and never by default in --headless,
+    // whose rendering must stay deterministic.
+#if A2_MIYOO
+    constexpr bool dynamicByDefault = true;
+#else
+    constexpr bool dynamicByDefault = false;
+#endif
+    dynamicResolution_ = options_.worldScale > 0         ? false
+                         : options_.dynamicResolution >= 0 ? options_.dynamicResolution != 0
+                                                           : dynamicByDefault && !options_.headless;
+    if (!options_.perf.empty()) {
+      std::error_code ec;
+      const bool fresh = !fs::exists(options_.perf, ec) || fs::file_size(options_.perf, ec) == 0;
+      perf_.open(options_.perf, std::ios::app);
+      if (!perf_)
+        throw std::runtime_error("Could not open perf file " + options_.perf.string());
+      if (fresh)
+        perf_ << perfCsvHeader << "\n";
+    }
     try {
       load(findData(options_));
     } catch (const std::exception &e) {
@@ -309,7 +381,10 @@ public:
     auto previous = std::chrono::steady_clock::now();
     float accumulator = 0;
     int frame = 0;
+    const double ticks = double(SDL_GetPerformanceFrequency());
+    uint64_t nextFrame = 0;
     while (!quit_) {
+      const uint64_t frameStart = SDL_GetPerformanceCounter();
       auto current = std::chrono::steady_clock::now();
       float dt = std::chrono::duration<float>(current - previous).count();
       previous = current;
@@ -382,9 +457,44 @@ public:
         audio_->muted(levels.mute);
         audio_->paused(paused_);
       }
+      // The world scale changes only here, between frames: below 1.0 a world
+      // draw after the first HUD primitive of a frame takes a slower path.
+      // Menus, the Car preview, results, movies and loading stay at 1.0.
+      const bool raceFrame = page_ == Page::Playing;
+      renderer_.setWorldScale(raceFrame ? raceWorldScale() : 1.0f);
+      const float drawnScale = renderer_.worldScale();
+      const bool timedRace = raceFrame && !paused_;
       draw();
-      if (!options_.headless)
+      // Work time (simulation and rendering, without waiting for the display)
+      // drives the dynamic resolution; the CSV records the whole frame.
+      uint64_t workEnd = SDL_GetPerformanceCounter();
+      if (!options_.headless) {
         present();
+        workEnd = presentStart_;
+        if (framePeriod_ > 0) {
+          // Absolute deadlines keep the average at the cap although SDL_Delay
+          // has millisecond steps; a frame that is late by more than a period
+          // starts the schedule again instead of running fast to catch up.
+          const auto period = uint64_t(ticks * framePeriod_);
+          nextFrame = (nextFrame ? nextFrame : frameStart) + period;
+          const uint64_t now = SDL_GetPerformanceCounter();
+          if (now < nextFrame)
+            SDL_Delay(Uint32(double(nextFrame - now) * 1000 / ticks));
+          else if (now - nextFrame > period)
+            nextFrame = now;
+        }
+      }
+      const double frameSeconds = double(SDL_GetPerformanceCounter() - frameStart) / ticks;
+      if (!raceFrame)
+        dynamic_.reset();
+      else if (timedRace && dynamicResolution_)
+        dynamic_.update(double(workEnd - frameStart) / ticks);
+      if (perf_.is_open()) {
+        perfStats_.add(frameSeconds);
+        perf_ << perfCsvLine(race_ && hasRace_ ? race_->stage() + 1 : 0, settings_.camera + 1,
+                             drawnScale, frameSeconds * 1000, residentKb())
+              << "\n";
+      }
       ++frame;
       if (options_.pauseAt && frame == options_.pauseAt && page_ == Page::Playing)
         paused_ = true;
@@ -403,6 +513,15 @@ public:
         std::cerr << "OpenA2: " << message_ << "\n";
         autosaveFailed = true;
       }
+    }
+    if (perf_.is_open()) {
+      perf_.flush();
+      const PerfSummary s = perfStats_.summary();
+      char line[160];
+      std::snprintf(line, sizeof line,
+                    "Perf: %d frames, avg %.2f fps, 1%% low %.2f fps, worst %.2f ms\n", s.frames,
+                    s.avgFps, s.low1Fps, s.worstMs);
+      std::cout << line;
     }
     if (!options_.screenshot.empty() && !renderer_.saveBMP(options_.screenshot))
       throw std::runtime_error("Could not save screenshot");
@@ -456,6 +575,27 @@ private:
   int selected_ = 0, slot_ = 0;
   float animation_ = 0, messageTime_ = 0, finishTime_ = 0, finishSpeed_ = 0;
   std::string error_, message_;
+  DynamicResolution dynamic_;
+  bool dynamicResolution_ = false;
+  std::ofstream perf_;
+  PerfStats perfStats_;
+  uint64_t presentStart_ = 0;
+#if A2_MIYOO
+  static constexpr double framePeriod_ = 1.0 / 60; // frame cap 60
+#else
+  static constexpr double framePeriod_ = 0; // uncapped (vsync paces the desktop)
+#endif
+  // World scale for race frames (menus always use 1.0).
+  float raceWorldScale() const {
+    if (options_.worldScale > 0)
+      return float(options_.worldScale);
+#if A2_MIYOO
+    // The Options GRAFISCH choice 320 x 200 is world scale 0.5 on the device.
+    if (settings_.lowResolution)
+      return .5f;
+#endif
+    return dynamicResolution_ ? dynamic_.scale() : 1.0f;
+  }
   void load(const fs::path &path) {
     auto data = std::make_unique<GameData>(path);
     auto assets = std::make_unique<Assets>(*data);
@@ -464,6 +604,7 @@ private:
       tracks[size_t(i)] = loadTrack(*data, i + 1);
     auto menu = std::make_unique<MenuArt>(renderer_, *assets);
     if (!options_.headless && !options_.validate) {
+      renderer_.setWorldScale(1);
       renderer_.clear(0xff000000);
       menu->loading();
       present();
@@ -485,6 +626,7 @@ private:
     tracks_ = std::move(tracks);
     race_ = std::make_unique<Race>(tracks_);
     scene_ = std::make_unique<Scene>(renderer_, *assets_);
+    scene_->setViewDistance(float(options_.viewDistance));
     if (!options_.headless && !options_.validate)
       audio_ = std::make_unique<Audio>(*assets_);
     page_ = profiles_ && !profiles_->active() ? Page::Players : Page::Main;
@@ -549,6 +691,7 @@ private:
   void loading() {
     if (!menu_ || options_.headless || options_.validate)
       return;
+    renderer_.setWorldScale(1);
     renderer_.clear(0xff000000);
     menu_->loading();
     present();
@@ -784,7 +927,12 @@ private:
     draft_.music = value == 1 || value == 2;
   }
   void setDisplay(int value) {
+#if A2_MIYOO
+    // No "Verbeterd" (tab 0) on the device: 320 x 200 (1) and 640 x 480 (2).
+    displayTab_ = value == 1 || value == 2 ? value : (value < 1 ? 2 : 1);
+#else
     displayTab_ = (value % 3 + 3) % 3;
+#endif
     draft_.enhanced = displayTab_ == 0;
     draft_.lowResolution = displayTab_ == 1;
     renderer_.setEnhanced(draft_.enhanced);
@@ -1236,6 +1384,10 @@ private:
           }
       }
       if (y >= 116 && y <= 145 && x >= 224) {
+#if A2_MIYOO
+        if (x < 374)
+          return;
+#endif
         selected_ = 5;
         setDisplay(x < 374 ? 0 : (x < 478 ? 1 : 2));
         return;
@@ -1409,6 +1561,9 @@ private:
     }
   }
   void fullscreen() {
+#if A2_MIYOO
+    return; // Always fullscreen on the device.
+#endif
     settings_.fullscreen = !settings_.fullscreen;
     if (window_)
       SDL_SetWindowFullscreen(window_, settings_.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
@@ -1554,6 +1709,10 @@ private:
         addButton(MenuButton::Configure, 365, 385, 2);
       } else if (page_ == Page::Options) {
         menu_->optionsPanel(displayTab_);
+#if A2_MIYOO
+        // Hide the "Verbeterd" tab with the panel colour beside it.
+        renderer_.rect(224, 116, 150, 30, renderer_.pixels()[size_t(140) * Renderer::width + 221]);
+#endif
         menu_->volume(0, 115, draft_.musicVolume);
         menu_->volume(0, 185, draft_.effectsVolume);
         menu_->radio(330, 164, draft_.horizon);
@@ -1659,11 +1818,15 @@ private:
     }
   }
   void present() {
+#if A2_MIYOO
+    // 320 x 200 is a reduced race world (raceWorldScale) on the device.
+    const bool low = false;
+#else
     const Settings &display = page_ == Page::Options ? draft_ : settings_;
-    const int targetWidth =
-        display.lowResolution && !renderer_.enhanced() ? 320 : renderer_.pixelWidth();
-    const int targetHeight =
-        display.lowResolution && !renderer_.enhanced() ? 200 : renderer_.pixelHeight();
+    const bool low = display.lowResolution && !renderer_.enhanced();
+#endif
+    const int targetWidth = low ? 320 : renderer_.pixelWidth();
+    const int targetHeight = low ? 200 : renderer_.pixelHeight();
     int width, height;
     SDL_QueryTexture(texture_, nullptr, nullptr, &width, &height);
     if (width != targetWidth || height != targetHeight) {
@@ -1695,6 +1858,7 @@ private:
     SDL_Rect dst{int((w - 640 * scale) / 2), int((h - 480 * scale) / 2), int(640 * scale),
                  int(480 * scale)};
     SDL_RenderCopy(display_, texture_, nullptr, &dst);
+    presentStart_ = SDL_GetPerformanceCounter();
     SDL_RenderPresent(display_);
   }
   void readSettings() {
@@ -1747,6 +1911,9 @@ private:
       f << "key" << i << " " << int(settings_.keys[size_t(i)]) << "\n";
   }
   void toggleGraphics() {
+#if A2_MIYOO
+    return; // F4 / left shoulder: enhanced graphics are unavailable on the device.
+#endif
     if (page_ == Page::Options) {
       setDisplay(draft_.enhanced ? 2 : 0);
       notify(draft_.enhanced ? "GRAFISCH: VERBETERD" : "GRAFISCH: ORIGINEEL");

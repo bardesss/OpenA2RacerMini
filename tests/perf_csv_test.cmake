@@ -1,0 +1,26 @@
+# Headless --perf on synthetic data: one CSV row per frame plus the header.
+# Usage: cmake -DOPENA2=<exe> -DDATA=<dir> -DOUT=<csv> -P perf_csv_test.cmake
+file(REMOVE "${OUT}")
+execute_process(
+  COMMAND "${OPENA2}" --data "${DATA}" --headless --demo --frames 120 --perf "${OUT}"
+  RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err)
+message(STATUS "perf run: ${result}\n${out}${err}")
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "The --perf run failed")
+endif()
+if(NOT out MATCHES "Perf: 120 frames, avg [0-9.]+ fps, 1% low [0-9.]+ fps, worst [0-9.]+ ms")
+  message(FATAL_ERROR "The --perf run must print the summary")
+endif()
+file(STRINGS "${OUT}" lines)
+list(LENGTH lines count)
+if(NOT count EQUAL 121)
+  message(FATAL_ERROR "Expected 121 CSV lines, got ${count}")
+endif()
+list(GET lines 0 header)
+if(NOT header STREQUAL "stage,camera,scale,frame_ms,rss_kb")
+  message(FATAL_ERROR "Unexpected CSV header: ${header}")
+endif()
+list(GET lines 1 first)
+if(NOT first MATCHES "^1,[1-3],1\.00,[0-9]+\.[0-9][0-9],[0-9]+$")
+  message(FATAL_ERROR "Unexpected CSV row: ${first}")
+endif()

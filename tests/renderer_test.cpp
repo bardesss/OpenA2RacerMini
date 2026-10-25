@@ -309,6 +309,43 @@ void hudSharpAfterScaledWorld() {
   check(pixel(r, 10, 10) == green && pixel(r, 11, 10) != green && pixel(r, 10, 11) != green,
         "HUD must draw at full resolution after a scaled world");
 }
+// Menu-like order at a reduced scale: the HUD backdrop resolves the world,
+// then a mesh is drawn (the Car page). The mesh must still appear.
+void worldAfterHudAtReducedScale() {
+  const auto cam = camera();
+  Mesh mesh;
+  for (auto point : {Vec2{100, 100}, Vec2{500, 100}, Vec2{100, 400}}) {
+    auto v = projected(cam, point.x, point.y, 5);
+    mesh.vertices.push_back({v.position, {}, {}, 0});
+  }
+  mesh.faces = {{{0, 1, 2}, {}}};
+  Image texture;
+  texture.width = texture.height = 1;
+  texture.pixels = {red};
+  Image backdrop;
+  backdrop.width = backdrop.height = 1;
+  backdrop.pixels = {blue};
+  // Classic mesh lighting shades the texture, so test for a red surface.
+  auto reddish = [](uint32_t c) { return ((c >> 16) & 255) > 128 && (c & 255) < 64; };
+  Renderer r;
+  r.setWorldScale(.5f);
+  for (int frame = 0; frame < 2; ++frame) {
+    r.clear(black);
+    r.blit(backdrop, 0, 0, 640, 480);
+    r.mesh(cam, mesh, texture, {}, 0);
+    r.finishWorld();
+    r.rect(10, 10, 1, 1, green);
+    check(reddish(pixel(r, 200, 200)), "A mesh drawn after a HUD blit was dropped");
+    check(pixel(r, 600, 450) == blue, "The HUD backdrop was overwritten");
+    check(pixel(r, 10, 10) == green, "HUD after the late world draw");
+  }
+  // The next normal frame renders the reduced world again.
+  r.clear(black);
+  screenTriangle(r, cam, 5, red);
+  r.finishWorld();
+  check(r.worldWidth() == 320 && pixel(r, 200, 200) == red && pixel(r, 600, 450) == black,
+        "Reduced world after a late world draw");
+}
 void scaleClamped() {
   Renderer r;
   check(r.worldScale() == 1.0f, "Default world scale");
@@ -338,6 +375,7 @@ int main() {
     worldScaleOneIsIdentical();
     worldScaleHalfCoversSameArea();
     hudSharpAfterScaledWorld();
+    worldAfterHudAtReducedScale();
     scaleClamped();
     std::cout << "Renderer checks passed: depth, perspective, clip, mask, wrapping, large "
                  "coordinates, blit, BMP, world scale\n";

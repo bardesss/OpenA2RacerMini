@@ -70,9 +70,18 @@ private:
   float worldScale_ = 1;
   int worldW_ = width, worldH_ = height;
   bool worldPending_ = false;
+  // Set when a world primitive arrives after the reduced world was already
+  // resolved this frame (for example a menu backdrop, then the Car mesh): the
+  // rest of the frame's world draws straight into the frame at full size.
+  bool worldDirect_ = false;
   bool scaledWorld() const { return worldScale_ < 1; }
-  uint32_t *worldColor() { return scaledWorld() ? world_.data() : color_.data(); }
+  uint32_t *worldColor() { return scaledWorld() && !worldDirect_ ? world_.data() : color_.data(); }
   void resolveWorld();
+  void beginWorldDraw() {
+    if (scaledWorld() && !worldPending_ && !worldDirect_)
+      drawWorldDirect();
+  }
+  void drawWorldDirect();
   struct CachedTexture {
     FilteredTexture texture;
     uint64_t used;

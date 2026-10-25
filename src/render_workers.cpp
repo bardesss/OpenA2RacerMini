@@ -13,6 +13,10 @@ class Workers {
 public:
   Workers() {
     unsigned count = std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
+#if A2_MIYOO
+    // Two render threads in all (this one and one worker) on the device.
+    count = std::min(count, 2u);
+#endif
     try {
       for (unsigned i = 1; i < count; ++i)
         threads_.emplace_back([this] { run(); });

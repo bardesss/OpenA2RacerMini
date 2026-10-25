@@ -18,7 +18,12 @@
 namespace a2 {
 namespace fs = std::filesystem;
 fs::path fromUTF8(std::string_view text) {
+#if defined(__cpp_char8_t)
   return fs::path(std::u8string(reinterpret_cast<const char8_t *>(text.data()), text.size()));
+#else
+  // C++17 (GCC 8): u8path is the UTF-8 constructor there.
+  return fs::u8path(text.begin(), text.end());
+#endif
 }
 struct Options {
   fs::path data, screenshot, preferences;

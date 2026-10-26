@@ -59,6 +59,13 @@ if(A2_SANITIZERS)
 endif()
 
 if(A2_BUILD_GAME)
+  # The device build links the Miyoo SDL2 fork from the cross sysroot and
+  # ships it as libs/libSDL2-2.0.so.0; it never downloads desktop SDL2.
+  # (A host build with A2_MIYOO=ON, as in host-test.sh --miyoo, still may.)
+  if(A2_MIYOO AND CMAKE_CROSSCOMPILING)
+    set(A2_USE_SYSTEM_SDL2 ON CACHE BOOL "" FORCE)
+    set(A2_FETCH_SDL2 OFF CACHE BOOL "" FORCE)
+  endif()
   if(A2_USE_SYSTEM_SDL2)
     find_package(SDL2 2.0.18 CONFIG QUIET)
   endif()
@@ -82,7 +89,9 @@ if(A2_BUILD_GAME)
 
   # Prefer a static dependency so the packaged application does not depend on a
   # build machine's Homebrew/vcpkg installation at runtime.
-  if(TARGET SDL2::SDL2-static)
+  # SDL2's autotools sdl2-config.cmake always declares SDL2::SDL2-static,
+  # even when no libSDL2.a was built; the Miyoo build wants the shared fork.
+  if(TARGET SDL2::SDL2-static AND NOT (A2_MIYOO AND CMAKE_CROSSCOMPILING))
     set(A2_SDL_TARGET SDL2::SDL2-static)
     set(A2_SDL_STATIC TRUE)
   else()
@@ -108,7 +117,7 @@ if(A2_BUILD_GAME)
   if(NOT A2_SDL_STATIC)
     if(WIN32)
       install(FILES $<TARGET_FILE:${A2_SDL_TARGET}> DESTINATION .)
-    else()
+    elseif(NOT A2_MIYOO)
       message(WARNING "Shared SDL2 selected. For a self-contained release use -DA2_USE_SYSTEM_SDL2=OFF, which builds pinned static SDL2.")
     endif()
   endif()

@@ -138,6 +138,22 @@ if(BUILD_TESTING)
     endif()
   endforeach()
   if(A2_BUILD_GAME AND Python3_Interpreter_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/generate_data.py")
+    # Script tests start opena2 with execute_process, which does not prepend
+    # CMAKE_CROSSCOMPILING_EMULATOR; under emulation (ARM build on an x86
+    # host via qemu) they get a wrapper that does, and longer timeouts.
+    set(A2_OPENA2_RUN "$<TARGET_FILE:opena2>")
+    set(A2_TIMEOUT_30 30)
+    set(A2_TIMEOUT_60 60)
+    if(CMAKE_CROSSCOMPILING AND CMAKE_CROSSCOMPILING_EMULATOR)
+      list(JOIN CMAKE_CROSSCOMPILING_EMULATOR "\" \"" a2_emulator)
+      file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/opena2-emulated"
+        CONTENT "#!/bin/sh\nexec \"${a2_emulator}\" \"$<TARGET_FILE:opena2>\" \"$@\"\n"
+        FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
+          WORLD_READ WORLD_EXECUTE)
+      set(A2_OPENA2_RUN "${CMAKE_CURRENT_BINARY_DIR}/opena2-emulated")
+      set(A2_TIMEOUT_30 600)
+      set(A2_TIMEOUT_60 900)
+    endif()
     add_test(NAME generate_test_data COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/generate_data.py" "${CMAKE_CURRENT_BINARY_DIR}/synthetic-data")
     set_tests_properties(generate_test_data PROPERTIES FIXTURES_SETUP a2_generated_data)
@@ -145,30 +161,30 @@ if(BUILD_TESTING)
       --headless --demo --frames 480 --screenshot "${CMAKE_CURRENT_BINARY_DIR}/synthetic-smoke.bmp")
     add_test(NAME headless_enhanced_game COMMAND opena2 --data "${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
       --headless --demo --enhanced --frames 420 --screenshot "${CMAKE_CURRENT_BINARY_DIR}/synthetic-enhanced.bmp")
-    set_tests_properties(headless_enhanced_game PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT 60)
-    set_tests_properties(headless_game PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT 30)
+    set_tests_properties(headless_enhanced_game PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_60})
+    set_tests_properties(headless_game PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_30})
     add_test(NAME perf_csv COMMAND "${CMAKE_COMMAND}"
-      -DOPENA2=$<TARGET_FILE:opena2> "-DDATA=${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
+      "-DOPENA2=${A2_OPENA2_RUN}" "-DDATA=${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
       "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/perf_csv.csv"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/perf_csv_test.cmake")
-    set_tests_properties(perf_csv PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT 60)
+    set_tests_properties(perf_csv PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_60})
     add_test(NAME headless_reduced_world COMMAND opena2 --data "${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
       --headless --demo --frames 240 --world-scale 0.5 --view-distance 1800
       --screenshot "${CMAKE_CURRENT_BINARY_DIR}/synthetic-reduced.bmp")
-    set_tests_properties(headless_reduced_world PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT 30)
+    set_tests_properties(headless_reduced_world PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_30})
     foreach(A2_AUTOSAVE_MODE IN ITEMS on_exit paused write_error)
       add_test(NAME autosave_${A2_AUTOSAVE_MODE} COMMAND "${CMAKE_COMMAND}"
-        -DOPENA2=$<TARGET_FILE:opena2> "-DDATA=${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
+        "-DOPENA2=${A2_OPENA2_RUN}" "-DDATA=${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
         "-DPREFS=${CMAKE_CURRENT_BINARY_DIR}/autosave_${A2_AUTOSAVE_MODE}-prefs"
         -DMODE=${A2_AUTOSAVE_MODE} -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/autosave_test.cmake")
       set_tests_properties(autosave_${A2_AUTOSAVE_MODE} PROPERTIES
-        FIXTURES_REQUIRED a2_generated_data TIMEOUT 60)
+        FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_60})
     endforeach()
     add_test(NAME intro_seen COMMAND "${CMAKE_COMMAND}"
-      -DOPENA2=$<TARGET_FILE:opena2> "-DDATA=${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
+      "-DOPENA2=${A2_OPENA2_RUN}" "-DDATA=${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
       "-DPREFS=${CMAKE_CURRENT_BINARY_DIR}/intro_seen-prefs"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/intro_seen_test.cmake")
-    set_tests_properties(intro_seen PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT 60)
+    set_tests_properties(intro_seen PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_60})
   endif()
 endif()
 

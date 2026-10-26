@@ -17,9 +17,12 @@
 # --then CMD runs CMD (with sh) in the container after ctest passes, with the
 # build in /tmp/build (verify-launch.sh uses it for /tmp/build/opena2).
 # --mount HOST:CONTAINER adds a read-only bind mount (repeatable).
+# --out HOST_DIR mounts HOST_DIR read-write at /out (created if missing), for
+# files the --then command hands back (e.g. the x86 saves for qemu-test.sh).
 #
 # Usage: host-test.sh [--rebuild] [--game] [--miyoo] [--then CMD]
-#                     [--mount HOST:CONTAINER]... [gcc-major-version]
+#                     [--mount HOST:CONTAINER]... [--out HOST_DIR]
+#                     [gcc-major-version]
 # Env:   A2_HOSTTEST_CACHE  archive cache dir (default ~/.cache/opena2mini-hosttest)
 set -euo pipefail
 REBUILD=0
@@ -34,6 +37,7 @@ while [ $# -gt 0 ]; do
     --miyoo) MIYOO=1 ;;
     --then) THEN="$2"; shift ;;
     --mount) EXTRA_MOUNTS+=(-v "$2:ro"); shift ;;
+    --out) mkdir -p "$2"; EXTRA_MOUNTS+=(-v "$(cd "$2" && pwd):/out"); shift ;;
     *) break ;;
   esac
   shift

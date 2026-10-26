@@ -93,3 +93,11 @@ not part of this port.
 See `Packaging/miyoo_mini/` in the source: `build.sh` cross-builds the ARM
 binary, `package.sh` stages the port tree and packs the release, and
 `verify-package.sh` / `verify-launch.sh` check the archive and the launcher.
+
+`build.sh` needs Docker; its first run builds the toolchain image (the Onion
+toolchain, about 1 GB, plus the Miyoo SDL2 fork). `qemu-test.sh` runs the
+ARM tests and a synthetic-data smoke run under qemu. The GitHub Actions
+workflow `.github/workflows/miyoo.yml` runs the host tests, the ARM build,
+the qemu tests and packaging on every push, and keeps the archive as a build
+artifact. Passing CI means it builds and runs under emulation; it does not
+replace testing on a device.

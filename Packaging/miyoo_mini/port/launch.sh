@@ -85,8 +85,11 @@ main() {
   export HOME="$PORT_DIR"
   export XDG_CONFIG_HOME="$PORT_DIR" XDG_DATA_HOME="$PORT_DIR" XDG_CACHE_HOME="$PORT_DIR"
   export LD_LIBRARY_PATH="$PORT_DIR/libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  # SDL video/audio driver exports for the Miyoo SDL2 fork go here (Task 9
-  # picks them by measurement on the device).
+  # The Miyoo SDL2 fork's drivers (MI_GFX video, MI_AO audio) only come up
+  # when named here; without them SDL reports "No available video device".
+  # Onion stops its audioserver first (KillAudioserver=1 in the .port file).
+  export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-mmiyoo}"
+  export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-mmiyoo}"
 
   if ! DATA=$(find_data "$PORT_DIR/data"); then
     no_data_reason "$PORT_DIR/data" >logs/latest.log

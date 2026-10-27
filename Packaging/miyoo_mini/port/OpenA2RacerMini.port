@@ -1,7 +1,10 @@
+#!/bin/sh
+# Onion runs this file to start the port (Emu/PORTS/launch.sh executes it);
+# ~Import ports reads the quoted values below with grep.
 GameName="OpenA2RacerMini"
 GameDir="OpenA2RacerMini"
 GameExecutable="launch.sh"
-# Onion hides a port whose GameDataFile is missing. The game data can come in
+# Onion hides a port whose data file is missing. The game data can come in
 # five shapes (see launch.sh find_data), so no single data file exists for all
 # of them; launch.sh, which is always present, keeps the shortcut visible and
 # explains in logs/latest.log what is missing when there is no data.
@@ -11,3 +14,5 @@ PerformanceMode=1
 # Extra game options, for example: Arguments="--world-scale 0.75"
 # See README.md in the port folder for the list.
 Arguments=""
+
+/mnt/SDCARD/Emu/PORTS/launch_standalone.sh "$GameName" "$GameDir" "$GameExecutable" "$Arguments" "$GameDataFile" "$KillAudioserver" "$PerformanceMode"

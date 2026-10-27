@@ -99,6 +99,13 @@ if "Roms/PORTS/Shortcuts/Racing/OpenA2RacerMini.port" in found:
         'GameName="OpenA2RacerMini"', 'GameDir="OpenA2RacerMini"',
         'GameExecutable="launch.sh"', "KillAudioserver=1", "PerformanceMode=1",
         'Arguments=""')), ".port has the Onion standalone fields")
+    # Onion's Emu/PORTS/launch.sh executes the .port file; it must hand the
+    # fields to launch_standalone.sh in that script's argument order.
+    check(port.startswith("#!/bin/sh\n") and
+          '/mnt/SDCARD/Emu/PORTS/launch_standalone.sh "$GameName" "$GameDir" '
+          '"$GameExecutable" "$Arguments" "$GameDataFile" "$KillAudioserver" '
+          '"$PerformanceMode"' in port.splitlines(),
+          ".port is a script that calls Onion's launch_standalone.sh")
     check(b"\r" not in port.encode() and b"\r" not in read(game + "launch.sh"),
           ".port and launch.sh have LF line endings")
 if "Roms/PORTS/Imgs/OpenA2RacerMini.png" in found:

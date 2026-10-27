@@ -1,0 +1,23 @@
+# Dependabot version updates. Upstream engine changes come in through
+# workflows/upstream-sync.yml; pinned SDL2/CMake versions that Dependabot
+# cannot see are checked by the same workflow.
+version: 2
+updates:
+  # Actions in .github/workflows, pinned to commit SHAs.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+
+  # The Onion toolchain base image (FROM ... @sha256 digest).
+  - package-ecosystem: docker
+    directory: /Packaging/miyoo_mini
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build

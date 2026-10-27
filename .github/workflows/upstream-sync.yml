@@ -1,0 +1,124 @@
+# Weekly check for new work upstream and for newer pinned dependencies.
+#  - upstream: when 3dutchie/openA2Racer main has commits main lacks, merge
+#    them into sync/upstream and open (or update) a PR. A merge conflict
+#    opens an issue instead.
+#  - pins: desktop SDL2 and the toolchain's CMake are pinned by version,
+#    which Dependabot cannot follow; newer versions are listed in one
+#    "Pinned dependencies" issue. The Miyoo SDL2 fork is not checked: its
+#    pin is deliberately behind the fork's main (see build-deps.sh).
+# PRs opened with GITHUB_TOKEN don't start CI by themselves: push a commit
+# to the branch, or close and reopen the PR, to run the checks.
+name: upstream-sync
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/3dutchie/openA2Racer.git
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  upstream:
+    name: Merge upstream main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge into sync/upstream
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags "$UPSTREAM" main
+          up="$(git rev-parse FETCH_HEAD)"
+          if git merge-base --is-ancestor "$up" HEAD; then
+            echo "main already contains upstream ${up:0:7}." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          count="$(git rev-list --count HEAD.."$up")"
+          git switch -C sync/upstream
+          if ! git merge --no-ff --no-edit -m "Merge upstream openA2Racer ${up:0:7}" "$up"; then
+            files="$(git diff --name-only --diff-filter=U)"
+            git merge --abort
+            title="Upstream merge conflict at ${up:0:7}"
+            if ! gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number' | grep -q .; then
+              printf 'Upstream main has %s new commit(s) up to %s, but merging into main conflicts in:\n\n```\n%s\n```\n\nMerge it by hand on a branch and open a PR.\n' \
+                "$count" "$up" "$files" | gh issue create --title "$title" --body-file -
+            fi
+            echo "Conflict merging upstream ${up:0:7}; issue opened." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git push --force-with-lease origin sync/upstream
+          body="$(printf 'Merges %s new upstream commit(s) from 3dutchie/openA2Racer up to %s.\n\nCI does not start on its own for this bot PR: close and reopen it (or push to the branch) to run the checks, then test before merging.\n\n%s\n' \
+            "$count" "$up" "$(git log --oneline HEAD^1..HEAD^2 | head -50)")"
+          if gh pr list --head sync/upstream --state open --json number --jq '.[0].number' | grep -q .; then
+            gh pr edit sync/upstream --body "$body"
+          else
+            gh pr create --base main --head sync/upstream --title "Merge upstream openA2Racer (${up:0:7})" --body "$body"
+          fi
+          echo "Upstream ${up:0:7} ($count commits) in sync/upstream." >> "$GITHUB_STEP_SUMMARY"
+
+  pins:
+    name: Check pinned dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - name: Compare pins with latest versions
+        run: |
+          set -euo pipefail
+          report=""
+          add() { report="${report}- $1"$'\n'; }
+          latest_release() {
+            gh api "repos/$1/releases/latest" --jq .tag_name 2>/dev/null || echo unknown
+          }
+
+          sdl_pin="$(sed -n 's|.*SDL2-\([0-9.]*\)\.tar\.gz.*|\1|p' CMakeLists.txt | head -1)"
+          sdl_latest="$(gh api repos/libsdl-org/SDL/releases --paginate --jq '.[].tag_name' 2>/dev/null |
+            sed -n 's/^release-\(2\.[0-9.]*\)$/\1/p' | sort -V | tail -1)"
+          if [ -n "$sdl_pin" ] && [ -n "$sdl_latest" ] && [ "$sdl_pin" != "$sdl_latest" ]; then
+            add "Desktop SDL2: pinned $sdl_pin, latest 2.x is $sdl_latest (CMakeLists.txt)"
+          fi
+
+          if [ -f Packaging/miyoo_mini/Dockerfile ]; then
+            cm_pin="$(sed -n 's/^ARG CMAKE_VER=//p' Packaging/miyoo_mini/Dockerfile)"
+            cm_latest="$(latest_release Kitware/CMake | sed 's/^v//')"
+            if [ -n "$cm_pin" ] && [ "$cm_latest" != unknown ] && [ "$cm_pin" != "$cm_latest" ]; then
+              add "Toolchain CMake: pinned $cm_pin, latest $cm_latest (Packaging/miyoo_mini/Dockerfile; update CMAKE_SHA256 too)"
+            fi
+          fi
+
+          title="Pinned dependencies have newer versions"
+          existing="$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')"
+          if [ -z "$report" ]; then
+            echo "All pins are current." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          body="$(printf 'Checked %s by the upstream-sync workflow. Update these by hand in a PR:\n\n%s' "$(date -u +%F)" "$report")"
+          printf '%s\n' "$body" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

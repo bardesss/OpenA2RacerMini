@@ -5,7 +5,9 @@
 # Built by build.sh (tag opena2mini-toolchain:latest) or by CI with a layer
 # cache. The image is labelled with a hash of this file and build-deps.sh;
 # build.sh rebuilds when the label no longer matches.
-FROM ghcr.io/onionui/miyoomini-toolchain:latest
+# Pinned by digest (the :latest of 2026-10-27) so builds are reproducible;
+# Dependabot proposes new digests.
+FROM ghcr.io/onionui/miyoomini-toolchain:latest@sha256:5d6d1d1b3b2d5c095edacc8b790874a3f57a5369e0463e2bee2a293a9fbccc67
 
 # Buster is end of life: its apt sources live on archive.debian.org.
 RUN set -eux; \

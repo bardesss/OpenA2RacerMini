@@ -58,7 +58,9 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-cp -a /build-ro/. /src/build-arm/
+# Plain -R: the tmpfs root is not ours, so preserving its times (-a) fails;
+# modes (the exec bits) are kept anyway.
+cp -R /build-ro/. /src/build-arm/
 SYSROOT="$(arm-linux-gnueabihf-gcc -print-sysroot)"
 export SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
 QEMU="qemu-arm-static -L $SYSROOT"

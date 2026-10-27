@@ -21,6 +21,14 @@
 #  - export HOST=arm-linux so configure takes the MI_AO audio branch
 #  - fix the [2]/[1] texture-format designator typo in the render driver
 #  - SDL_revision.h stub
+# OpenA2RacerMini's own patches (found on the Mini Plus):
+#  - render: always blit synchronously in RenderCopy. The fork's threaded
+#    path keeps only a pointer to the caller's pixels (UpdateTexture does not
+#    copy) and blits them later from a thread, while the game already draws
+#    the next frame into the same buffer: the screen flickers.
+#  - audio: the MI_AO driver always plays 16-bit samples but leaves the
+#    requested format in the spec; set S16 so SDL converts (the game asks
+#    for float32, which came out as silence).
 # Unlike OpenRCT2mini the dummy video/audio drivers stay enabled: SDL only
 # picks them when SDL_VIDEODRIVER/SDL_AUDIODRIVER=dummy is set, and the
 # qemu tests need them.
@@ -100,6 +108,15 @@ int glMakeCurrent(_THIS, SDL_Window *window, SDL_GLContext context) { return 0; 
 void glDeleteContext(_THIS, SDL_GLContext context) {}
 #endif
 EOF
+grep -q 'if ((evt.mode == MMIYOO_MOUSE_MODE) || (srcrect->w == 800)) {' \
+  src/render/mmiyoo/SDL_render_mmiyoo.c
+sed -i 's|if ((evt.mode == MMIYOO_MOUSE_MODE) \|\| (srcrect->w == 800)) {|if (1 /* OpenA2RacerMini: synchronous blit */) {|' \
+  src/render/mmiyoo/SDL_render_mmiyoo.c
+grep -q 'OpenA2RacerMini: synchronous blit' src/render/mmiyoo/SDL_render_mmiyoo.c
+grep -q '    SDL_zerop(this->hidden);' src/audio/mmiyoo/SDL_audio_mmiyoo.c
+sed -i 's|^    SDL_zerop(this->hidden);$|    SDL_zerop(this->hidden);\n    this->spec.format = AUDIO_S16SYS; /* OpenA2RacerMini: MI_AO plays S16 */\n    SDL_CalculateAudioSpec(\&this->spec);|' \
+  src/audio/mmiyoo/SDL_audio_mmiyoo.c
+grep -q 'OpenA2RacerMini: MI_AO plays S16' src/audio/mmiyoo/SDL_audio_mmiyoo.c
 cat > include/SDL_revision.h <<EOF
 #define SDL_REVISION "sdl2_miyoo-${SDL2_COMMIT}"
 #define SDL_REVISION_NUMBER 0

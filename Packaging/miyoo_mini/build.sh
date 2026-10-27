@@ -11,7 +11,8 @@
 # The image opena2mini-toolchain:latest (Dockerfile + build-deps.sh) is built
 # when it is missing or its org.opena2mini.deps label (a SHA-256 of those two
 # files) differs from the current files; CI builds it with a layer cache and
-# the same label. Extra `docker build` arguments: $A2_DOCKER_BUILD_ARGS.
+# the same label. Extra `docker build` arguments: $A2_DOCKER_BUILD_ARGS;
+# extra `docker run` arguments: $A2_DOCKER_RUN_ARGS.
 #
 # Output: build-arm/opena2, the ARM test binaries, and build-arm/libs/
 # {libSDL2-2.0.so.0, SDL2-LICENSE.txt} for package.sh. After a build the
@@ -81,7 +82,8 @@ in_toolchain() {
     MINGW* | MSYS* | CYGWIN*) ;;
     *) user=(--user "$(id -u):$(id -g)" -e HOME=/tmp) ;;
   esac
-  docker run --rm "${user[@]}" -v "$ROOT:/src" -w /src \
+  # shellcheck disable=SC2086  # A2_DOCKER_RUN_ARGS is a list of arguments
+  docker run --rm "${user[@]}" ${A2_DOCKER_RUN_ARGS:-} -v "$ROOT:/src" -w /src \
     -e "BUILD_TYPE=$BUILD_TYPE" "$IMAGE" bash -c "$1"
 }
 

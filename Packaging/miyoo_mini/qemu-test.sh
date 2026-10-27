@@ -37,6 +37,13 @@ if [ "${1:-}" != --inside ]; then
   fi
   quoted=""
   if [ "${#args[@]}" -gt 0 ]; then quoted="$(printf ' %q' "${args[@]}")"; fi
+  # 32-bit code under qemu-user gets EOVERFLOW from readdir on ext4/overlay
+  # (64-bit directory hash offsets, since qemu makes 64-bit syscalls); the
+  # device's 32-bit kernel never hands those out. tmpfs uses small offsets,
+  # so the tests run on tmpfs: /tmp (unit test temp dirs, smoke-run data)
+  # and a tmpfs /src/build-arm filled from a read-only mount of the real
+  # build tree (ctest's data/prefs dirs; the paths CMake baked in stay valid).
+  export A2_DOCKER_RUN_ARGS="${A2_DOCKER_RUN_ARGS:-} --tmpfs /tmp:exec,mode=1777 -v $ROOT/build-arm:/build-ro:ro --tmpfs /src/build-arm:exec,mode=1777"
   exec bash "$HERE/build.sh" --run "bash /src/Packaging/miyoo_mini/qemu-test.sh --inside$quoted"
 fi
 
@@ -51,6 +58,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+cp -a /build-ro/. /src/build-arm/
 SYSROOT="$(arm-linux-gnueabihf-gcc -print-sysroot)"
 export SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
 QEMU="qemu-arm-static -L $SYSROOT"

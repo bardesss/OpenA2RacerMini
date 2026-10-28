@@ -26,6 +26,9 @@
 #    path keeps only a pointer to the caller's pixels (UpdateTexture does not
 #    copy) and blits them later from a thread, while the game already draws
 #    the next frame into the same buffer: the screen flickers.
+#  - render: the mmiyoo renderer declines unless the mmiyoo video driver
+#    runs, so SDL falls back to its software renderer under the dummy driver
+#    (qemu tests); its now synchronous MI_GFX blit would crash there.
 #  - audio: the MI_AO driver always plays 16-bit samples but leaves the
 #    requested format in the spec; set S16 so SDL converts (the game asks
 #    for float32, which came out as silence).
@@ -113,6 +116,11 @@ grep -q 'if ((evt.mode == MMIYOO_MOUSE_MODE) || (srcrect->w == 800)) {' \
 sed -i 's|if ((evt.mode == MMIYOO_MOUSE_MODE) \|\| (srcrect->w == 800)) {|if (1 /* OpenA2RacerMini: synchronous blit */) {|' \
   src/render/mmiyoo/SDL_render_mmiyoo.c
 grep -q 'OpenA2RacerMini: synchronous blit' src/render/mmiyoo/SDL_render_mmiyoo.c
+grep -q '^    renderer = (SDL_Renderer \*) SDL_calloc(1, sizeof(\*renderer));$' \
+  src/render/mmiyoo/SDL_render_mmiyoo.c
+sed -i 's|^    renderer = (SDL_Renderer \*) SDL_calloc(1, sizeof(\*renderer));$|    if (SDL_strcmp(SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "", MMIYOO_DRIVER_NAME) != 0) {\n        SDL_SetError("mmiyoo renderer needs the mmiyoo video driver"); /* OpenA2RacerMini: MI_GFX only */\n        return NULL;\n    }\n&|' \
+  src/render/mmiyoo/SDL_render_mmiyoo.c
+grep -q 'OpenA2RacerMini: MI_GFX only' src/render/mmiyoo/SDL_render_mmiyoo.c
 grep -q '    SDL_zerop(this->hidden);' src/audio/mmiyoo/SDL_audio_mmiyoo.c
 sed -i 's|^    SDL_zerop(this->hidden);$|    SDL_zerop(this->hidden);\n    this->spec.format = AUDIO_S16SYS; /* OpenA2RacerMini: MI_AO plays S16 */\n    SDL_CalculateAudioSpec(\&this->spec);|' \
   src/audio/mmiyoo/SDL_audio_mmiyoo.c

@@ -1,8 +1,11 @@
 #include "assets.hpp"
 #include "audio.hpp"
+#include "dynamic_resolution.hpp"
 #include "menu_art.hpp"
 #include "movie.hpp"
+#include "perf_stats.hpp"
 #include "profiles.hpp"
+#include "save_slots.hpp"
 #include "scene.hpp"
 #include <SDL.h>
 #include <chrono>
@@ -13,18 +16,30 @@
 #include <memory>
 #include <sstream>
 #include <thread>
+#if A2_MIYOO
+#include "miyoo_controls.hpp"
+#include <unistd.h>
+#endif
 
 namespace a2 {
 namespace fs = std::filesystem;
 fs::path fromUTF8(std::string_view text) {
+#if defined(__cpp_char8_t)
   return fs::path(std::u8string(reinterpret_cast<const char8_t *>(text.data()), text.size()));
+#else
+  // C++17 (GCC 8): u8path is the UTF-8 constructor there.
+  return fs::u8path(text.begin(), text.end());
+#endif
 }
 struct Options {
-  fs::path data, screenshot, preferences;
+  fs::path data, screenshot, preferences, perf;
   bool headless = false, demo = false, race = false, validate = false, mute = false,
-       skipIntro = false;
+       skipIntro = false, skipIntroIfSeen = false, autosaveOnExit = false, loadAutosave = false;
   std::string movie, menu;
-  int frames = 0, stage = 0, car = 0, camera = -1, graphics = -1;
+  int frames = 0, stage = 0, car = 0, camera = -1, graphics = -1, pauseAt = 0;
+  // 0 or -1: not given on the command line.
+  double worldScale = 0, viewDistance = 0;
+  int dynamicResolution = -1, vsync = -1;
 };
 void usage() {
   std::cout << "OpenA2 0.4.0 - native A2 Racer reconstruction\n"
@@ -41,10 +56,19 @@ void usage() {
                "  --screenshot PATH  Save the last rendered frame as BMP\n"
                "  --validate         Check all original resources and exit\n"
                "  --skip-intro       Open the menu without the intro movie\n"
+               "  --skip-intro-if-seen  Play the intro only on the first launch\n"
                "  --movie NAME.SMK   Play a movie directly\n"
                "  --menu PAGE        Preview main/players/controls/options/scores/loading\n"
                "  --prefs DIRECTORY  Separate portable preferences and profiles directory\n"
                "  --mute             Disable sound\n"
+               "  --load-autosave    Continue from the autosave slot\n"
+               "  --autosave-on-exit Write the autosave when --frames ends during a race\n"
+               "  --pause-at N       Pause the race after N frames (debugging)\n"
+               "  --perf FILE        Append a CSV row per frame and print fps stats on exit\n"
+               "  --world-scale S    Fixed race world resolution scale 0.5..1 (no dynamic)\n"
+               "  --dynamic-resolution on|off  Lower the race world resolution when slow\n"
+               "  --view-distance N  Race view distance in units, at most 2600\n"
+               "  --vsync on|off     Wait for the display refresh (default on)\n"
                "  --help             Show this help\n"
                "Original A2 Racer CD data is required, and is not included.\n";
 }
@@ -65,6 +89,22 @@ Options parse(int argc, char **argv) {
         throw std::runtime_error("Invalid value for " + a);
       return v;
     };
+    auto number = [&](double low, double high) {
+      auto s = value();
+      size_t n = 0;
+      double v = std::stod(s, &n);
+      if (n != s.size() || !(v >= low && v <= high))
+        throw std::runtime_error("Invalid value for " + a);
+      return v;
+    };
+    auto onOff = [&]() {
+      auto s = value();
+      if (s == "on")
+        return 1;
+      if (s == "off")
+        return 0;
+      throw std::runtime_error("Invalid value for " + a + " (on or off)");
+    };
     if (a == "--help" || a == "-h") {
       usage();
       std::exit(0);
@@ -82,6 +122,8 @@ Options parse(int argc, char **argv) {
       o.validate = true;
     else if (a == "--skip-intro")
       o.skipIntro = true;
+    else if (a == "--skip-intro-if-seen")
+      o.skipIntroIfSeen = true;
     else if (a == "--movie")
       o.movie = value();
     else if (a == "--menu")
@@ -90,6 +132,22 @@ Options parse(int argc, char **argv) {
       o.preferences = value();
     else if (a == "--mute")
       o.mute = true;
+    else if (a == "--load-autosave")
+      o.loadAutosave = true;
+    else if (a == "--autosave-on-exit")
+      o.autosaveOnExit = true;
+    else if (a == "--pause-at")
+      o.pauseAt = integer(1, 10000000);
+    else if (a == "--perf")
+      o.perf = value();
+    else if (a == "--world-scale")
+      o.worldScale = number(.5, 1);
+    else if (a == "--dynamic-resolution")
+      o.dynamicResolution = onOff();
+    else if (a == "--view-distance")
+      o.viewDistance = number(1, 2600);
+    else if (a == "--vsync")
+      o.vsync = onOff();
     else if (a == "--enhanced")
       o.graphics = 1;
     else if (a == "--classic")
@@ -169,8 +227,14 @@ struct Settings {
   bool music = true, effects = true, mute = false, radar = true, fullscreen = false,
        enhanced = false, horizon = true, dashboard = true, lowResolution = false;
   int musicVolume = 4, effectsVolume = 4;
+#if A2_MIYOO
+  // Left, right, brake, gas: D-pad steers, B (LCTRL) brakes, A (SPACE) accelerates.
+  std::array<SDL_Scancode, 4> keys{SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT, SDL_SCANCODE_LCTRL,
+                                   SDL_SCANCODE_SPACE};
+#else
   std::array<SDL_Scancode, 4> keys{SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT, SDL_SCANCODE_DOWN,
                                    SDL_SCANCODE_UP};
+#endif
   int camera = 1, car = 0, unlocked = 0;
   std::string name = "SPELER";
 };
@@ -200,12 +264,21 @@ public:
       SDL_SetMainReady();
       if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_TIMER) != 0)
         throw std::runtime_error(SDL_GetError());
+#if A2_MIYOO
+      // The device screen is 640x480: the frame maps 1:1, always fullscreen.
+      settings_.fullscreen = true;
+      window_ = SDL_CreateWindow("OpenA2 - A2 Racer", SDL_WINDOWPOS_UNDEFINED,
+                                 SDL_WINDOWPOS_UNDEFINED, 640, 480, SDL_WINDOW_FULLSCREEN);
+#else
       window_ = SDL_CreateWindow("OpenA2 - A2 Racer", SDL_WINDOWPOS_CENTERED,
                                  SDL_WINDOWPOS_CENTERED, 960, 720, SDL_WINDOW_RESIZABLE);
+#endif
       if (!window_)
         throw std::runtime_error(SDL_GetError());
-      display_ =
-          SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+      // --vsync defaults to on; Task 9 picks the device default.
+      display_ = SDL_CreateRenderer(
+          window_, -1,
+          SDL_RENDERER_ACCELERATED | (options_.vsync != 0 ? SDL_RENDERER_PRESENTVSYNC : 0));
       if (!display_)
         display_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_SOFTWARE);
       if (!display_)
@@ -242,13 +315,40 @@ public:
       if (profiles_->selected() >= 0)
         profileRow_ = profiles_->selected();
     }
+#if A2_MIYOO
+    // Enhanced graphics are unavailable on the device, even from a copied
+    // desktop settings file or --enhanced.
+    settings_.enhanced = false;
+#endif
     draft_ = settings_;
     settings_.mute = options_.mute || settings_.mute;
     if (options_.camera >= 0)
       settings_.camera = options_.camera;
+#if !A2_MIYOO
     if (options_.graphics >= 0)
       settings_.enhanced = options_.graphics != 0;
+#endif
     renderer_.setEnhanced(settings_.enhanced);
+    // A fixed --world-scale disables the dynamic resolution. Otherwise it is
+    // on by default on the device only, and never by default in --headless,
+    // whose rendering must stay deterministic.
+#if A2_MIYOO
+    constexpr bool dynamicByDefault = true;
+#else
+    constexpr bool dynamicByDefault = false;
+#endif
+    dynamicResolution_ = options_.worldScale > 0         ? false
+                         : options_.dynamicResolution >= 0 ? options_.dynamicResolution != 0
+                                                           : dynamicByDefault && !options_.headless;
+    if (!options_.perf.empty()) {
+      std::error_code ec;
+      const bool fresh = !fs::exists(options_.perf, ec) || fs::file_size(options_.perf, ec) == 0;
+      perf_.open(options_.perf, std::ios::app);
+      if (!perf_)
+        throw std::runtime_error("Could not open perf file " + options_.perf.string());
+      if (fresh)
+        perf_ << perfCsvHeader << "\n";
+    }
     try {
       load(findData(options_));
     } catch (const std::exception &e) {
@@ -256,6 +356,16 @@ public:
         throw;
       error_ = e.what();
       page_ = Page::Error;
+#if A2_MIYOO
+      // The launcher keeps stderr in logs/latest.log.
+      std::cerr << "OpenA2: " << error_ << "\n";
+#endif
+    }
+    if (options_.loadAutosave && page_ != Page::Error && !options_.validate) {
+      if (loadAutosave())
+        std::cout << "Autosave loaded: " << autosaveFile().string() << "\n";
+      else if (options_.headless)
+        throw std::runtime_error(message_);
     }
   }
   ~App() {
@@ -278,7 +388,10 @@ public:
     auto previous = std::chrono::steady_clock::now();
     float accumulator = 0;
     int frame = 0;
+    const double ticks = double(SDL_GetPerformanceFrequency());
+    uint64_t nextFrame = 0;
     while (!quit_) {
+      const uint64_t frameStart = SDL_GetPerformanceCounter();
       auto current = std::chrono::steady_clock::now();
       float dt = std::chrono::duration<float>(current - previous).count();
       previous = current;
@@ -351,14 +464,71 @@ public:
         audio_->muted(levels.mute);
         audio_->paused(paused_);
       }
+      // The world scale changes only here, between frames: below 1.0 a world
+      // draw after the first HUD primitive of a frame takes a slower path.
+      // Menus, the Car preview, results, movies and loading stay at 1.0.
+      const bool raceFrame = page_ == Page::Playing;
+      renderer_.setWorldScale(raceFrame ? raceWorldScale() : 1.0f);
+      const float drawnScale = renderer_.worldScale();
+      const bool timedRace = raceFrame && !paused_;
       draw();
-      if (!options_.headless)
+      // Work time (simulation and rendering, without waiting for the display)
+      // drives the dynamic resolution; the CSV records the whole frame.
+      uint64_t workEnd = SDL_GetPerformanceCounter();
+      if (!options_.headless) {
         present();
+        workEnd = presentStart_;
+        if (framePeriod_ > 0) {
+          // Absolute deadlines keep the average at the cap although SDL_Delay
+          // has millisecond steps; a frame that is late by more than a period
+          // starts the schedule again instead of running fast to catch up.
+          const auto period = uint64_t(ticks * framePeriod_);
+          nextFrame = (nextFrame ? nextFrame : frameStart) + period;
+          const uint64_t now = SDL_GetPerformanceCounter();
+          if (now < nextFrame)
+            SDL_Delay(Uint32(double(nextFrame - now) * 1000 / ticks));
+          else if (now - nextFrame > period)
+            nextFrame = now;
+        }
+      }
+      const double frameSeconds = double(SDL_GetPerformanceCounter() - frameStart) / ticks;
+      if (!raceFrame)
+        dynamic_.reset();
+      else if (timedRace && dynamicResolution_)
+        dynamic_.update(double(workEnd - frameStart) / ticks);
+      if (perf_.is_open()) {
+        perfStats_.add(frameSeconds);
+        perf_ << perfCsvLine(race_ && hasRace_ ? race_->stage() + 1 : 0, settings_.camera + 1,
+                             drawnScale, frameSeconds * 1000, residentKb())
+              << "\n";
+      }
       ++frame;
+      if (options_.pauseAt && frame == options_.pauseAt && page_ == Page::Playing)
+        paused_ = true;
       if (options_.frames && frame >= options_.frames)
         quit_ = true;
       if (!options_.headless && !display_)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    // Debug stand-in for the Menu button: autosave only while in a race.
+    bool autosaveFailed = false;
+    if (options_.autosaveOnExit && hasRace_ && page_ == Page::Playing) {
+      if (saveAutosave())
+        std::cout << "Autosave written: " << autosaveFile().string() << " (paused " << paused_
+                  << ", fine " << race_->fineDelay() << ")\n";
+      else {
+        std::cerr << "OpenA2: " << message_ << "\n";
+        autosaveFailed = true;
+      }
+    }
+    if (perf_.is_open()) {
+      perf_.flush();
+      const PerfSummary s = perfStats_.summary();
+      char line[160];
+      std::snprintf(line, sizeof line,
+                    "Perf: %d frames, avg %.2f fps, 1%% low %.2f fps, worst %.2f ms\n", s.frames,
+                    s.avgFps, s.low1Fps, s.worstMs);
+      std::cout << line;
     }
     if (!options_.screenshot.empty() && !renderer_.saveBMP(options_.screenshot))
       throw std::runtime_error("Could not save screenshot");
@@ -366,7 +536,16 @@ public:
       std::cout << "Frame " << frame << ", stage " << race_->stage() + 1 << ", distance "
                 << race_->player.distance << ", speed " << race_->player.speed << ", money "
                 << race_->player.money << "\n";
-    return 0;
+#if A2_MIYOO
+    // Flush the autosave, settings and profiles: the device may be powered
+    // off right after the Menu button.
+    sync();
+    // Leaving from the error page (missing or broken game data) tells Onion
+    // and the launcher log that the game did not run.
+    if (page_ == Page::Error)
+      return 1;
+#endif
+    return autosaveFailed ? 1 : 0;
   }
 
 private:
@@ -407,6 +586,27 @@ private:
   int selected_ = 0, slot_ = 0;
   float animation_ = 0, messageTime_ = 0, finishTime_ = 0, finishSpeed_ = 0;
   std::string error_, message_;
+  DynamicResolution dynamic_;
+  bool dynamicResolution_ = false;
+  std::ofstream perf_;
+  PerfStats perfStats_;
+  uint64_t presentStart_ = 0;
+#if A2_MIYOO
+  static constexpr double framePeriod_ = 1.0 / 60; // frame cap 60
+#else
+  static constexpr double framePeriod_ = 0; // uncapped (vsync paces the desktop)
+#endif
+  // World scale for race frames (menus always use 1.0).
+  float raceWorldScale() const {
+    if (options_.worldScale > 0)
+      return float(options_.worldScale);
+#if A2_MIYOO
+    // The Options GRAFISCH choice 320 x 200 is world scale 0.5 on the device.
+    if (settings_.lowResolution)
+      return .5f;
+#endif
+    return dynamicResolution_ ? dynamic_.scale() : 1.0f;
+  }
   void load(const fs::path &path) {
     auto data = std::make_unique<GameData>(path);
     auto assets = std::make_unique<Assets>(*data);
@@ -415,6 +615,7 @@ private:
       tracks[size_t(i)] = loadTrack(*data, i + 1);
     auto menu = std::make_unique<MenuArt>(renderer_, *assets);
     if (!options_.headless && !options_.validate) {
+      renderer_.setWorldScale(1);
       renderer_.clear(0xff000000);
       menu->loading();
       present();
@@ -436,6 +637,7 @@ private:
     tracks_ = std::move(tracks);
     race_ = std::make_unique<Race>(tracks_);
     scene_ = std::make_unique<Scene>(renderer_, *assets_);
+    scene_->setViewDistance(float(options_.viewDistance));
     if (!options_.headless && !options_.validate)
       audio_ = std::make_unique<Audio>(*assets_);
     page_ = profiles_ && !profiles_->active() ? Page::Players : Page::Main;
@@ -443,7 +645,7 @@ private:
     hasRace_ = false;
     if (options_.race || options_.demo)
       start(options_.stage, options_.car);
-    else if (!options_.skipIntro && !options_.validate && options_.menu.empty())
+    else if (!options_.skipIntro && !options_.validate && options_.menu.empty() && !introSeen())
       playMovie("A2INTRO.SMK", page_);
     if (!options_.menu.empty()) {
       const std::map<std::string, Page> screens{
@@ -460,6 +662,21 @@ private:
       exitAfterMovie_ = true;
       playMovie(options_.movie, Page::Main);
     }
+  }
+  // --skip-intro-if-seen: true when a marker in the preferences directory shows
+  // the intro was already started once; otherwise writes the marker.
+  bool introSeen() {
+    if (!options_.skipIntroIfSeen || saveDir_.empty())
+      return false;
+    const fs::path marker = saveDir_ / "intro-seen";
+    std::error_code ec;
+    if (fs::exists(marker, ec)) {
+      std::cout << "Intro: already seen, skipped\n";
+      return true;
+    }
+    std::ofstream(marker) << "The intro movie has been shown once.\n";
+    std::cout << "Intro: first launch, playing\n";
+    return false;
   }
   void playMovie(const std::string &name, Page after) {
     if (!data_->exists(name))
@@ -500,6 +717,7 @@ private:
   void loading() {
     if (!menu_ || options_.headless || options_.validate)
       return;
+    renderer_.setWorldScale(1);
     renderer_.clear(0xff000000);
     menu_->loading();
     present();
@@ -558,7 +776,11 @@ private:
     in.brake = float(k[settings_.keys[2]] || (standard && k[SDL_SCANCODE_S]));
     in.steer = float(k[settings_.keys[1]] || (standard && k[SDL_SCANCODE_D])) -
                float(k[settings_.keys[0]] || (standard && k[SDL_SCANCODE_A]));
+#if A2_MIYOO
+    in.handbrake = k[SDL_SCANCODE_T]; // R1
+#else
     in.handbrake = k[SDL_SCANCODE_SPACE];
+#endif
     if (controller_) {
       float axis = SDL_GameControllerGetAxis(controller_, SDL_CONTROLLER_AXIS_LEFTX) / 32767.0f;
       if (std::abs(axis) > 0.15f)
@@ -630,7 +852,17 @@ private:
       profiles_->save();
   }
   void askName() {
+#if A2_MIYOO
+    // No keyboard on the device: pre-fill a unique name that A (Confirm) accepts.
+    std::vector<std::string> names;
+    if (profiles_)
+      for (const auto &slot : profiles_->slots())
+        if (slot)
+          names.push_back(slot->name);
+    editedName_ = defaultPlayerName(names);
+#else
     editedName_ = "Speler";
+#endif
     selectName_ = true;
     go(Page::Name);
     SDL_StartTextInput();
@@ -721,7 +953,12 @@ private:
     draft_.music = value == 1 || value == 2;
   }
   void setDisplay(int value) {
+#if A2_MIYOO
+    // No "Verbeterd" (tab 0) on the device: 320 x 200 (1) and 640 x 480 (2).
+    displayTab_ = value == 1 || value == 2 ? value : (value < 1 ? 2 : 1);
+#else
     displayTab_ = (value % 3 + 3) % 3;
+#endif
     draft_.enhanced = displayTab_ == 0;
     draft_.lowResolution = displayTab_ == 1;
     renderer_.setEnhanced(draft_.enhanced);
@@ -858,12 +1095,18 @@ private:
           notify("SPEEL EERST DE VORIGE ETAPPE UIT");
         break;
       case Page::Slots:
+        // slot_ == -1 is the AUTOSAVE entry before slot 1, listed only while
+        // autosave.sav exists.
         if (selected_ == 0)
-          slot_ = (slot_ + 9) % 10;
+          slot_ = slot_ < 0 ? 9 : (slot_ == 0 && autosaveExists() ? -1 : (slot_ + 9) % 10);
         else if (selected_ == 1)
-          slot_ = (slot_ + 1) % 10;
+          slot_ = slot_ < 0 ? 0 : (slot_ == 9 && autosaveExists() ? -1 : (slot_ + 1) % 10);
+        else if (selected_ == 2 && slot_ < 0)
+          notify("KIES EEN SLOT OM OP TE SLAAN");
         else if (selected_ == 2)
           saveSlot(slot_);
+        else if ((selected_ == 3 || selected_ == 4) && slot_ < 0)
+          loadAutosave();
         else if (selected_ == 3)
           loadSlot(slot_);
         else if (selected_ == 4)
@@ -899,7 +1142,13 @@ private:
       SDL_Scancode code = SDL_GetScancodeFromKey(key);
       if (code == SDL_SCANCODE_UNKNOWN)
         return;
+#if A2_MIYOO
+      // SPACE (A) is the default gas key and must stay bindable. On the device
+      // no game function reads SPACE through key(); Confirm sends RETURN.
+      if (key == SDLK_RETURN || key == SDLK_p || key == SDLK_g ||
+#else
       if (key == SDLK_RETURN || key == SDLK_SPACE || key == SDLK_p || key == SDLK_g ||
+#endif
           key == SDLK_m || key == SDLK_r || (key >= SDLK_F1 && key <= SDLK_F12) ||
           (key >= SDLK_1 && key <= SDLK_9) || (key >= SDLK_KP_1 && key <= SDLK_KP_9)) {
         notify("DEZE TOETS IS GERESERVEERD VOOR EEN SPELFUNCTIE");
@@ -1161,6 +1410,10 @@ private:
           }
       }
       if (y >= 116 && y <= 145 && x >= 224) {
+#if A2_MIYOO
+        if (x < 374)
+          return;
+#endif
         selected_ = 5;
         setDisplay(x < 374 ? 0 : (x < 478 ? 1 : 2));
         return;
@@ -1176,11 +1429,101 @@ private:
         return;
       }
   }
+#if A2_MIYOO
+  // miyoo_controls.cpp hard-codes these SDL2 numbers to stay SDL-free.
+  static_assert(SDL_SCANCODE_UP == 82 && SDL_SCANCODE_DOWN == 81 && SDL_SCANCODE_LEFT == 80 &&
+                    SDL_SCANCODE_RIGHT == 79 && SDL_SCANCODE_SPACE == 44 &&
+                    SDL_SCANCODE_LCTRL == 224 && SDL_SCANCODE_LSHIFT == 225 &&
+                    SDL_SCANCODE_LALT == 226 && SDL_SCANCODE_E == 8 && SDL_SCANCODE_T == 23 &&
+                    SDL_SCANCODE_TAB == 43 && SDL_SCANCODE_BACKSPACE == 42 &&
+                    SDL_SCANCODE_RETURN == 40 && SDL_SCANCODE_RCTRL == 228 &&
+                    SDL_SCANCODE_ESCAPE == 41,
+                "SDL scancodes differ from the Miyoo button table");
+  MiyooControls miyoo_;
+  void miyooKey(SDL_Scancode code, SDL_Keycode sym, bool down) {
+    // BEDIENING key binding takes the raw key, as on the desktop.
+    if (down && binding_ >= 0) {
+      key(sym);
+      return;
+    }
+    auto button = miyooButtonFromScancode(int(code));
+    if (!button)
+      return;
+    const bool inRace = page_ == Page::Playing;
+    // Fine dialog: only A/Start confirm; B and the D-pad must not reach
+    // key(SDLK_ESCAPE), which would leave the race without an autosave.
+    auto context = miyooContextFor(*button, inRace, inRace && race_->fineDelay() > 0,
+                                   page_ == Page::Movie);
+    for (auto command : down ? miyoo_.press(*button, context) : miyoo_.release(*button, context)) {
+      // Without game data there is no race or menu: Menu (exit) is the only
+      // action, so quick load cannot run on a race that was never created.
+      if (page_ == Page::Error && command != MiyooCommand::Exit)
+        continue;
+      miyooCommand(command);
+    }
+  }
+  void miyooCommand(MiyooCommand command) {
+    switch (command) {
+    case MiyooCommand::Up:
+      key(SDLK_UP);
+      break;
+    case MiyooCommand::Down:
+      key(SDLK_DOWN);
+      break;
+    case MiyooCommand::Left:
+      key(SDLK_LEFT);
+      break;
+    case MiyooCommand::Right:
+      key(SDLK_RIGHT);
+      break;
+    case MiyooCommand::Confirm:
+      key(SDLK_RETURN);
+      break;
+    case MiyooCommand::Back:
+      key(SDLK_ESCAPE);
+      break;
+    case MiyooCommand::Pause:
+      key(SDLK_p);
+      break;
+    case MiyooCommand::CycleCamera:
+      settings_.camera = (settings_.camera + 1) % 3;
+      break;
+    case MiyooCommand::ToggleRadar:
+      key(SDLK_F5);
+      break;
+    case MiyooCommand::RestartStage:
+      key(SDLK_r);
+      break;
+    case MiyooCommand::QuickSave:
+      saveSlot(0);
+      break;
+    case MiyooCommand::QuickLoad:
+      loadSlot(0);
+      break;
+    case MiyooCommand::AutosaveAndExit:
+      // Exit even if the save failed (status 0); no message is shown.
+      if (!saveAutosave())
+        std::cerr << "OpenA2: " << message_ << "\n";
+      messageTime_ = 0;
+      quit_ = true;
+      break;
+    case MiyooCommand::Exit:
+      quit_ = true;
+      break;
+    }
+  }
+#endif
   void events() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
       if (e.type == SDL_QUIT)
         quit_ = true;
+#if A2_MIYOO
+      else if (e.type == SDL_TEXTINPUT) {
+        // Button-only names: the button keys (SPACE, E, T, ...) must not type.
+      } else if ((e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) && !e.key.repeat)
+        miyooKey(e.key.keysym.scancode, e.key.keysym.sym, e.type == SDL_KEYDOWN);
+#else
       else if (e.type == SDL_TEXTINPUT && page_ == Page::Name) {
         std::string candidate = selectName_ ? std::string() : editedName_;
         candidate += e.text.text;
@@ -1194,6 +1537,7 @@ private:
         selectName_ = false;
       } else if (e.type == SDL_KEYDOWN && (!e.key.repeat || page_ == Page::Name))
         key(e.key.keysym.sym);
+#endif
       else if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST &&
                page_ == Page::Playing)
         paused_ = true;
@@ -1248,6 +1592,9 @@ private:
     }
   }
   void fullscreen() {
+#if A2_MIYOO
+    return; // Always fullscreen on the device.
+#endif
     settings_.fullscreen = !settings_.fullscreen;
     if (window_)
       SDL_SetWindowFullscreen(window_, settings_.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
@@ -1319,8 +1666,14 @@ private:
       renderer_.text(42, 60, "OPEN A2", 0xffffd35a, 4);
       renderer_.text(42, 145, "ORIGINELE SPELGEGEVENS NODIG", 0xffded9ec, 2);
       renderer_.text(42, 195, error_, 0xffdddddd);
+#if A2_MIYOO
+      renderer_.text(42, 320, "COPY YOUR CD OR DISC IMAGE TO", 0xffffd35a, 2);
+      renderer_.text(42, 368, "ROMS/PORTS/GAMES/OPENA2RACERMINI/DATA");
+      renderer_.text(42, 400, "PRESS MENU TO RETURN TO ONION");
+#else
       renderer_.text(42, 320, "DROP YOUR CD FOLDER OR CD.ISO HERE", 0xffffd35a, 2);
       renderer_.text(42, 368, "OPENA2 --DATA /PATH/TO/CD");
+#endif
     } else if (page_ == Page::Loading) {
       renderer_.clear(0xff000000);
       menu_->loading();
@@ -1393,6 +1746,10 @@ private:
         addButton(MenuButton::Configure, 365, 385, 2);
       } else if (page_ == Page::Options) {
         menu_->optionsPanel(displayTab_);
+#if A2_MIYOO
+        // Hide the "Verbeterd" tab with the panel colour beside it.
+        renderer_.rect(224, 116, 150, 30, renderer_.pixels()[size_t(140) * Renderer::width + 221]);
+#endif
         menu_->volume(0, 115, draft_.musicVolume);
         menu_->volume(0, 185, draft_.effectsVolume);
         menu_->radio(330, 164, draft_.horizon);
@@ -1444,8 +1801,11 @@ private:
         menu_->routeCard(std::clamp(selected_, 0, 5));
         addButton(MenuButton::Back, 0, 410, 6);
       } else if (page_ == Page::Slots) {
-        menu_->serifText(35, 125, "SLOT " + std::to_string(slot_ + 1), 0xffe5df58, 24);
-        const auto filename = saveFile(slot_);
+        if (slot_ < 0 && !autosaveExists())
+          slot_ = 0;
+        menu_->serifText(35, 125, slot_ < 0 ? "AUTOSAVE" : "SLOT " + std::to_string(slot_ + 1),
+                         0xffe5df58, 24);
+        const auto filename = slot_ < 0 ? autosaveFile() : saveFile(slot_);
         std::error_code ec;
         menu_->serifText(35, 157, fs::exists(filename, ec) ? "Opgeslagen spel" : "Leeg slot",
                          0xffffffff, 18);
@@ -1495,11 +1855,15 @@ private:
     }
   }
   void present() {
+#if A2_MIYOO
+    // 320 x 200 is a reduced race world (raceWorldScale) on the device.
+    const bool low = false;
+#else
     const Settings &display = page_ == Page::Options ? draft_ : settings_;
-    const int targetWidth =
-        display.lowResolution && !renderer_.enhanced() ? 320 : renderer_.pixelWidth();
-    const int targetHeight =
-        display.lowResolution && !renderer_.enhanced() ? 200 : renderer_.pixelHeight();
+    const bool low = display.lowResolution && !renderer_.enhanced();
+#endif
+    const int targetWidth = low ? 320 : renderer_.pixelWidth();
+    const int targetHeight = low ? 200 : renderer_.pixelHeight();
     int width, height;
     SDL_QueryTexture(texture_, nullptr, nullptr, &width, &height);
     if (width != targetWidth || height != targetHeight) {
@@ -1531,6 +1895,7 @@ private:
     SDL_Rect dst{int((w - 640 * scale) / 2), int((h - 480 * scale) / 2), int(640 * scale),
                  int(480 * scale)};
     SDL_RenderCopy(display_, texture_, nullptr, &dst);
+    presentStart_ = SDL_GetPerformanceCounter();
     SDL_RenderPresent(display_);
   }
   void readSettings() {
@@ -1583,6 +1948,9 @@ private:
       f << "key" << i << " " << int(settings_.keys[size_t(i)]) << "\n";
   }
   void toggleGraphics() {
+#if A2_MIYOO
+    return; // F4 / left shoulder: enhanced graphics are unavailable on the device.
+#endif
     if (page_ == Page::Options) {
       setDisplay(draft_.enhanced ? 2 : 0);
       notify(draft_.enhanced ? "GRAFISCH: VERBETERD" : "GRAFISCH: ORIGINEEL");
@@ -1597,44 +1965,46 @@ private:
   fs::path saveFile(int slot, bool legacy = false) const {
     if (profiles_ && profiles_->active() && !legacy)
       return profiles_->savePath(slot);
-    return saveDir_ / ("slot" + std::to_string(slot) + ".sav");
+    return slotPath(saveDir_, {SlotKind::Manual, slot});
+  }
+  // One autosave for the installation, separate from every manual slot.
+  fs::path autosaveFile() const { return slotPath(saveDir_, {SlotKind::Autosave}); }
+  bool autosaveExists() const {
+    std::error_code ec;
+    return fs::exists(autosaveFile(), ec);
   }
   void saveSlot(int slot) {
+    saveRace([&] { return saveFile(slot); }, "OPGESLAGEN IN SLOT " + std::to_string(slot + 1));
+  }
+  bool saveAutosave() { return saveRace([&] { return autosaveFile(); }, "AUTOSAVE OPGESLAGEN"); }
+  template <class Target> bool saveRace(Target target, const std::string &done) {
     if (!hasRace_) {
       message_ = "START EERST EEN RACE";
       messageTime_ = 3;
-      return;
+      return false;
     }
+    std::string error;
+    bool saved = false;
     try {
-      auto target = saveFile(slot), temp = target;
-      fs::create_directories(target.parent_path());
-      temp += ".tmp";
-      {
-        std::ofstream f(temp);
-        if (!f)
-          throw std::runtime_error("Cannot create save file");
-        race_->save(f);
-        f.flush();
-        if (!f)
-          throw std::runtime_error("Cannot write save file");
-      }
-      std::error_code ec;
-      fs::rename(temp, target, ec);
-      if (ec) {
-        fs::copy_file(temp, target, fs::copy_options::overwrite_existing);
-        fs::remove(temp);
-      }
-      message_ = "OPGESLAGEN IN SLOT " + std::to_string(slot + 1);
+      saved = writeAtomically(
+          target(), [&](std::ostream &f) { race_->save(f); }, error);
     } catch (const std::exception &e) {
-      message_ = std::string("SAVE ERROR: ") + e.what();
+      error = e.what();
     }
+    message_ = saved ? done : "SAVE ERROR: " + error;
     messageTime_ = 3;
+    return saved;
   }
   void loadSlot(int slot, bool legacy = false) {
+    loadRace([&] { return saveFile(slot, legacy); }, "Slot is empty");
+  }
+  bool loadAutosave() { return loadRace([&] { return autosaveFile(); }, "No autosave"); }
+  template <class Source> bool loadRace(Source source, const char *empty) {
+    bool loaded = false;
     try {
-      std::ifstream f(saveFile(slot, legacy));
+      std::ifstream f(source());
       if (!f)
-        throw std::runtime_error("Slot is empty");
+        throw std::runtime_error(empty);
       loading();
       race_->load(f);
       if (profiles_ && profile() &&
@@ -1650,10 +2020,12 @@ private:
       paused_ = false;
       finishTime_ = 0;
       message_ = "SPEL GELADEN";
+      loaded = true;
     } catch (const std::exception &e) {
       message_ = std::string("LOAD ERROR: ") + e.what();
     }
     messageTime_ = 3;
+    return loaded;
   }
 };
 } // namespace a2

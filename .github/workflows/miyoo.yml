@@ -1,0 +1,125 @@
+# Miyoo Mini Plus / Mini Flip port: host tests, ARM cross build, qemu tests,
+# Onion package. A v* tag also creates a DRAFT release with the archive; the
+# owner reviews and publishes it.
+name: miyoo
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: miyoo-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  host-tests:
+    name: Host tests (gcc 13, gcc 8, game, launcher)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # CMake/Ninja/SDL2 archives host-test.sh downloads (resumable cache).
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/opena2mini-hosttest
+          key: hosttest-${{ hashFiles('Packaging/miyoo_mini/host-test.sh') }}
+          restore-keys: hosttest-
+
+      - name: Core tests, gcc 13
+        run: bash Packaging/miyoo_mini/host-test.sh 13
+
+      - name: Core tests, gcc 8 (device compiler version)
+        run: bash Packaging/miyoo_mini/host-test.sh 8
+
+      - name: Game tests, gcc 13, and x86 saves for the round trip
+        run: |
+          bash Packaging/miyoo_mini/host-test.sh --game --out "$RUNNER_TEMP/x86-saves" \
+            --then "bash /src/Packaging/miyoo_mini/save-roundtrip.sh produce /tmp/build/opena2 /tmp/build/synthetic-data /out" 13
+
+      - name: Launcher tests (dash, BusyBox ash, game with A2_MIYOO=ON)
+        run: sh Packaging/miyoo_mini/verify-launch.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x86-saves
+          path: ${{ runner.temp }}/x86-saves
+          if-no-files-found: error
+          retention-days: 7
+
+  arm:
+    name: ARM build, qemu tests, package
+    needs: host-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Toolchain input hash
+        id: deps
+        run: echo "hash=$(bash Packaging/miyoo_mini/build.sh --deps-hash)" >> "$GITHUB_OUTPUT"
+
+      # The Onion toolchain plus SDL2 fork, with layers cached between runs so
+      # SDL2 is only rebuilt when Dockerfile or build-deps.sh changes. The
+      # label lets build.sh recognise the image as current.
+      - name: Toolchain image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: Packaging/miyoo_mini
+          file: Packaging/miyoo_mini/Dockerfile
+          tags: opena2mini-toolchain:latest
+          labels: org.opena2mini.deps=${{ steps.deps.outputs.hash }}
+          load: true
+          cache-from: type=gha,scope=opena2mini-toolchain
+          cache-to: type=gha,mode=max,scope=opena2mini-toolchain
+
+      - name: Cross build and ELF/glibc checks
+        run: bash Packaging/miyoo_mini/build.sh
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: x86-saves
+          path: ${{ runner.temp }}/x86-saves
+
+      - name: ARM ctest, smoke run and x86 -> ARM save round trip (qemu)
+        run: bash Packaging/miyoo_mini/qemu-test.sh --x86-saves "$RUNNER_TEMP/x86-saves"
+
+      - name: Package
+        run: bash Packaging/miyoo_mini/build.sh --run "bash Packaging/miyoo_mini/package.sh"
+
+      - name: Verify package
+        run: bash Packaging/miyoo_mini/build.sh --run 'bash Packaging/miyoo_mini/verify-package.sh dist/OpenA2RacerMini-onion-*.7z'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenA2RacerMini-onion
+          path: dist/OpenA2RacerMini-onion-*.7z
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: arm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: OpenA2RacerMini-onion
+          path: dist
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          draft: true
+          files: dist/OpenA2RacerMini-onion-*.7z
+          body: |
+            OpenA2RacerMini for Onion OS (Miyoo Mini Plus; Mini Flip expected to work, untested).
+            Draft created by CI. Needs your own Dutch A2 Racer CD; no game data is included.

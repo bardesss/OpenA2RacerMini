@@ -87,6 +87,21 @@ void names() {
     rejects([&] { ProfileStore::normalizeName(name); },
             "Invalid or oversized profile name accepted");
 }
+void defaultNames() {
+  check(defaultPlayerName({}) == "SPELER", "First default name is not SPELER");
+  check(defaultPlayerName({"SPELER"}) == "SPELER 2", "Second default name is not SPELER 2");
+  check(defaultPlayerName({"SPELER", "SPELER 2"}) == "SPELER 3",
+        "Third default name is not SPELER 3");
+  check(defaultPlayerName({"SPELER 2"}) == "SPELER", "Free SPELER was not reused");
+  check(defaultPlayerName({"Speler"}) == "SPELER 2", "Default name clashes ignoring case");
+  std::vector<std::string> all{"SPELER"};
+  for (int i = 2; i <= int(ProfileStore::capacity); ++i)
+    all.push_back("SPELER " + std::to_string(i));
+  const std::string last = defaultPlayerName(all);
+  check(last == "SPELER " + std::to_string(ProfileStore::capacity + 1) &&
+            ProfileStore::normalizeName(last) == last,
+        "Default name for a full store is not a valid unique name");
+}
 void resultsAndBoards() {
   Directory directory;
   ProfileStore store(directory.path);
@@ -183,6 +198,7 @@ void persistenceAndCorruption() {
 int main() {
   try {
     names();
+    defaultNames();
     creationAndIsolation();
     resultsAndBoards();
     persistenceAndCorruption();

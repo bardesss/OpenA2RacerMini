@@ -4,7 +4,13 @@ if(CMAKE_HOST_APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET AND NOT DEFINED 
 endif()
 project(OpenA2 VERSION 0.4.0 LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+# GCC 8 (Miyoo toolchain) only implements part of C++20; fall back to C++17.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
+  set(A2_CXX_STD 17)
+else()
+  set(A2_CXX_STD 20)
+endif()
+set(CMAKE_CXX_STANDARD ${A2_CXX_STD})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 if(MSVC)
@@ -17,6 +23,7 @@ option(A2_USE_SYSTEM_SDL2 "Look for an installed SDL2 before downloading" ON)
 option(A2_FETCH_SDL2 "Download pinned SDL2 if no installed package is selected" ON)
 option(A2_MACOS_BUNDLE "Package the macOS executable in an .app bundle" OFF)
 option(A2_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+option(A2_MIYOO "Build for Miyoo Mini Plus / Mini Flip" OFF)
 set(A2_TEST_DATA "" CACHE PATH "Optional original CD directory/image for integration tests")
 
 add_library(a2smacker STATIC third_party/libsmacker/smacker.c)
@@ -25,15 +32,21 @@ set_target_properties(a2smacker PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
 # Upstream uses plain char for negative status codes and signed bit-reader
 # results; retain those semantics on ARM toolchains whose default char is unsigned.
 target_compile_options(a2smacker PRIVATE "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-fsigned-char>")
-add_library(a2core STATIC src/assets.cpp src/simulation.cpp src/renderer.cpp src/scene.cpp src/movie.cpp src/guardrails.cpp src/hud.cpp src/texture.cpp src/graphics.cpp src/render_workers.cpp src/profiles.cpp src/menu_art.cpp)
+add_library(a2core STATIC src/assets.cpp src/simulation.cpp src/renderer.cpp src/scene.cpp src/movie.cpp src/guardrails.cpp src/hud.cpp src/texture.cpp src/graphics.cpp src/render_workers.cpp src/profiles.cpp src/menu_art.cpp src/save_slots.cpp src/miyoo_controls.cpp src/dynamic_resolution.cpp src/perf_stats.cpp)
 target_include_directories(a2core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_features(a2core PUBLIC cxx_std_20)
+target_compile_features(a2core PUBLIC cxx_std_${A2_CXX_STD})
 find_package(Threads REQUIRED)
 target_link_libraries(a2core PRIVATE a2smacker Threads::Threads)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
+  target_link_libraries(a2core PUBLIC stdc++fs)
+endif()
 if(MSVC)
   target_compile_options(a2core PRIVATE /W4 /permissive-)
 else()
   target_compile_options(a2core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+if(A2_MIYOO)
+  target_compile_definitions(a2core PRIVATE A2_MIYOO=1)
 endif()
 
 if(A2_SANITIZERS)
@@ -46,6 +59,13 @@ if(A2_SANITIZERS)
 endif()
 
 if(A2_BUILD_GAME)
+  # The device build links the Miyoo SDL2 fork from the cross sysroot and
+  # ships it as libs/libSDL2-2.0.so.0; it never downloads desktop SDL2.
+  # (A host build with A2_MIYOO=ON, as in host-test.sh --miyoo, still may.)
+  if(A2_MIYOO AND CMAKE_CROSSCOMPILING)
+    set(A2_USE_SYSTEM_SDL2 ON CACHE BOOL "" FORCE)
+    set(A2_FETCH_SDL2 OFF CACHE BOOL "" FORCE)
+  endif()
   if(A2_USE_SYSTEM_SDL2)
     find_package(SDL2 2.0.18 CONFIG QUIET)
   endif()
@@ -69,7 +89,9 @@ if(A2_BUILD_GAME)
 
   # Prefer a static dependency so the packaged application does not depend on a
   # build machine's Homebrew/vcpkg installation at runtime.
-  if(TARGET SDL2::SDL2-static)
+  # SDL2's autotools sdl2-config.cmake always declares SDL2::SDL2-static,
+  # even when no libSDL2.a was built; the Miyoo build wants the shared fork.
+  if(TARGET SDL2::SDL2-static AND NOT (A2_MIYOO AND CMAKE_CROSSCOMPILING))
     set(A2_SDL_TARGET SDL2::SDL2-static)
     set(A2_SDL_STATIC TRUE)
   else()
@@ -79,6 +101,9 @@ if(A2_BUILD_GAME)
   add_executable(opena2 src/main.cpp src/audio.cpp)
   target_link_libraries(opena2 PRIVATE a2core ${A2_SDL_TARGET})
   target_compile_definitions(opena2 PRIVATE SDL_MAIN_HANDLED)
+  if(A2_MIYOO)
+    target_compile_definitions(opena2 PRIVATE A2_MIYOO=1)
+  endif()
   if(APPLE AND A2_MACOS_BUNDLE)
     set_target_properties(opena2 PROPERTIES
       MACOSX_BUNDLE TRUE
@@ -92,7 +117,7 @@ if(A2_BUILD_GAME)
   if(NOT A2_SDL_STATIC)
     if(WIN32)
       install(FILES $<TARGET_FILE:${A2_SDL_TARGET}> DESTINATION .)
-    else()
+    elseif(NOT A2_MIYOO)
       message(WARNING "Shared SDL2 selected. For a self-contained release use -DA2_USE_SYSTEM_SDL2=OFF, which builds pinned static SDL2.")
     endif()
   endif()
@@ -101,7 +126,7 @@ endif()
 find_package(Python3 COMPONENTS Interpreter QUIET)
 include(CTest)
 if(BUILD_TESTING)
-  foreach(A2_TEST_NAME IN ITEMS assets simulation renderer movie legacy_geometry guardrails hud graphics profiles menu_art race_details police race_camera finish)
+  foreach(A2_TEST_NAME IN ITEMS assets simulation renderer movie legacy_geometry guardrails hud graphics profiles menu_art race_details police race_camera finish compat save_slots miyoo_controls dynamic_resolution perf_stats)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/${A2_TEST_NAME}_test.cpp")
       add_executable(${A2_TEST_NAME}_test tests/${A2_TEST_NAME}_test.cpp)
       target_link_libraries(${A2_TEST_NAME}_test PRIVATE a2core)
@@ -113,6 +138,22 @@ if(BUILD_TESTING)
     endif()
   endforeach()
   if(A2_BUILD_GAME AND Python3_Interpreter_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/generate_data.py")
+    # Script tests start opena2 with execute_process, which does not prepend
+    # CMAKE_CROSSCOMPILING_EMULATOR; under emulation (ARM build on an x86
+    # host via qemu) they get a wrapper that does, and longer timeouts.
+    set(A2_OPENA2_RUN "$<TARGET_FILE:opena2>")
+    set(A2_TIMEOUT_30 30)
+    set(A2_TIMEOUT_60 60)
+    if(CMAKE_CROSSCOMPILING AND CMAKE_CROSSCOMPILING_EMULATOR)
+      list(JOIN CMAKE_CROSSCOMPILING_EMULATOR "\" \"" a2_emulator)
+      file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/opena2-emulated"
+        CONTENT "#!/bin/sh\nexec \"${a2_emulator}\" \"$<TARGET_FILE:opena2>\" \"$@\"\n"
+        FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
+          WORLD_READ WORLD_EXECUTE)
+      set(A2_OPENA2_RUN "${CMAKE_CURRENT_BINARY_DIR}/opena2-emulated")
+      set(A2_TIMEOUT_30 600)
+      set(A2_TIMEOUT_60 900)
+    endif()
     add_test(NAME generate_test_data COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/generate_data.py" "${CMAKE_CURRENT_BINARY_DIR}/synthetic-data")
     set_tests_properties(generate_test_data PROPERTIES FIXTURES_SETUP a2_generated_data)
@@ -120,8 +161,30 @@ if(BUILD_TESTING)
       --headless --demo --frames 480 --screenshot "${CMAKE_CURRENT_BINARY_DIR}/synthetic-smoke.bmp")
     add_test(NAME headless_enhanced_game COMMAND opena2 --data "${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
       --headless --demo --enhanced --frames 420 --screenshot "${CMAKE_CURRENT_BINARY_DIR}/synthetic-enhanced.bmp")
-    set_tests_properties(headless_enhanced_game PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT 60)
-    set_tests_properties(headless_game PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT 30)
+    set_tests_properties(headless_enhanced_game PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_60})
+    set_tests_properties(headless_game PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_30})
+    add_test(NAME perf_csv COMMAND "${CMAKE_COMMAND}"
+      "-DOPENA2=${A2_OPENA2_RUN}" "-DDATA=${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
+      "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/perf_csv.csv"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/perf_csv_test.cmake")
+    set_tests_properties(perf_csv PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_60})
+    add_test(NAME headless_reduced_world COMMAND opena2 --data "${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
+      --headless --demo --frames 240 --world-scale 0.5 --view-distance 1800
+      --screenshot "${CMAKE_CURRENT_BINARY_DIR}/synthetic-reduced.bmp")
+    set_tests_properties(headless_reduced_world PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_30})
+    foreach(A2_AUTOSAVE_MODE IN ITEMS on_exit paused write_error)
+      add_test(NAME autosave_${A2_AUTOSAVE_MODE} COMMAND "${CMAKE_COMMAND}"
+        "-DOPENA2=${A2_OPENA2_RUN}" "-DDATA=${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
+        "-DPREFS=${CMAKE_CURRENT_BINARY_DIR}/autosave_${A2_AUTOSAVE_MODE}-prefs"
+        -DMODE=${A2_AUTOSAVE_MODE} -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/autosave_test.cmake")
+      set_tests_properties(autosave_${A2_AUTOSAVE_MODE} PROPERTIES
+        FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_60})
+    endforeach()
+    add_test(NAME intro_seen COMMAND "${CMAKE_COMMAND}"
+      "-DOPENA2=${A2_OPENA2_RUN}" "-DDATA=${CMAKE_CURRENT_BINARY_DIR}/synthetic-data"
+      "-DPREFS=${CMAKE_CURRENT_BINARY_DIR}/intro_seen-prefs"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/intro_seen_test.cmake")
+    set_tests_properties(intro_seen PROPERTIES FIXTURES_REQUIRED a2_generated_data TIMEOUT ${A2_TIMEOUT_60})
   endif()
 endif()
 

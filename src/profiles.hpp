@@ -71,4 +71,8 @@ private:
   std::string document() const;
   void parse(std::string_view);
 };
+// Pre-filled name for a new player when there is no keyboard: "SPELER", or
+// "SPELER 2", "SPELER 3", ... for the first one not in `existing` (compared
+// ignoring ASCII case). Always a valid name for ProfileStore::create.
+std::string defaultPlayerName(const std::vector<std::string> &existing);
 } // namespace a2

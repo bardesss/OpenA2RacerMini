@@ -6,6 +6,9 @@ namespace a2 {
 void Renderer::setEnhanced(bool enabled) {
   if (enhanced_ == enabled)
     return;
+  // Enhanced mode always renders the world at full resolution.
+  if (enabled)
+    setWorldScale(1);
   const int scale = enabled ? 2 : 1;
   // Allocate before committing, so allocation failure leaves a usable renderer.
   std::vector<uint32_t> color(size_t(width * scale) * height * scale);
@@ -17,6 +20,8 @@ void Renderer::setEnhanced(bool enabled) {
     band.clear();
   enhanced_ = enabled;
   scale_ = scale;
+  worldW_ = width * scale;
+  worldH_ = height * scale;
 }
 void Renderer::resetTextureCache() {
   textures_.clear();
@@ -46,8 +51,10 @@ const FilteredTexture &Renderer::filtered(const Image &image, bool mask) {
   return textures_.emplace(key, CachedTexture{std::move(texture), frame_}).first->second.texture;
 }
 void Renderer::finishWorld() {
-  if (!enhanced_)
+  if (!enhanced_) {
+    resolveWorld();
     return;
+  }
   flushWorld();
   // Contrast-directed subpixel edge filtering, applied before the original HUD.
   // The direction follows the edge, preserving detail across flat surfaces.

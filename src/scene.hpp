@@ -12,6 +12,8 @@ public:
   void draw(const Race &, int camera = 1, bool radar = true, bool horizon = true,
             bool dashboard = true);
   void carPreview(int car, float angle);
+  // Race view distance limit; 0 keeps the default (2600, enhanced 7800).
+  void setViewDistance(float units) { viewDistance_ = units; }
   void drawPause() { hud_.drawPause(); }
   void drawFinish(float presentationSeconds, int camera) {
     hud_.drawFinish(presentationSeconds, camera);
@@ -21,6 +23,7 @@ private:
   Renderer &renderer_;
   Assets &assets_;
   Hud hud_;
+  float viewDistance_ = 0;
   void scenery(const Race &, const Camera &);
   void gantries(const Race &, const Camera &);
   void roadProps(const Race &, const Camera &);

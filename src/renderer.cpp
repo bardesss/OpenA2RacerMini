@@ -1,6 +1,8 @@
 #include "renderer.hpp"
 #include "render_workers.hpp"
+#include <array>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <limits>
 
@@ -13,7 +15,18 @@ void Camera::lookAt(Vec3 eye, Vec3 target) {
 }
 Renderer::Renderer() : color_(width * height), depth_(width * height) {}
 void Renderer::clear(uint32_t color) {
-  std::fill(color_.begin(), color_.end(), color);
+  if (worldDirect_) {
+    worldDirect_ = false;
+    worldW_ = worldWidth();
+    worldH_ = worldHeight();
+    depth_.resize(size_t(worldW_) * worldH_);
+  }
+  if (scaledWorld()) {
+    std::fill(world_.begin(), world_.end(), color);
+    worldPending_ = true;
+  } else {
+    std::fill(color_.begin(), color_.end(), color);
+  }
   std::fill(depth_.begin(), depth_.end(), 0);
   triangles_ = 0;
   commands_.clear();
@@ -21,9 +34,98 @@ void Renderer::clear(uint32_t color) {
     band.clear();
   ++frame_;
 }
+int Renderer::worldWidth() const { return int(std::lround(width * worldScale_)); }
+int Renderer::worldHeight() const { return int(std::lround(height * worldScale_)); }
+void Renderer::setWorldScale(float scale) {
+  if (enhanced_)
+    return;
+  scale = std::isfinite(scale) ? std::clamp(scale, .5f, 1.f) : 1.f;
+  if (scale == worldScale_)
+    return;
+  // Reserve the largest size once so later scale changes never reallocate or throw.
+  world_.reserve(size_t(width) * height);
+  depth_.reserve(size_t(width) * height);
+  worldScale_ = scale;
+  worldW_ = worldWidth();
+  worldH_ = worldHeight();
+  world_.resize(scaledWorld() ? size_t(worldW_) * worldH_ : 0);
+  depth_.resize(size_t(worldW_) * worldH_);
+  worldPending_ = false;
+  worldDirect_ = false;
+  commands_.clear();
+  for (auto &band : bands_)
+    band.clear();
+}
+void Renderer::drawWorldDirect() {
+  // The reduced world is already in the frame (or was never armed by clear()),
+  // so later world draws go to the full-size frame; depth restarts empty there,
+  // as everything already in the frame is behind them. clear() switches back.
+  worldDirect_ = true;
+  worldW_ = width;
+  worldH_ = height;
+  depth_.resize(size_t(width) * height);
+  std::fill(depth_.begin(), depth_.end(), 0);
+}
+// Blends 8-bit channels as two 16-bit lanes; f is the weight of b, 0..256.
+static inline uint32_t lerpPixel(uint32_t a, uint32_t b, uint32_t f) {
+  const uint32_t g = 256 - f;
+  const uint32_t rb = (((a & 0x00ff00ffu) * g + (b & 0x00ff00ffu) * f) >> 8) & 0x00ff00ffu;
+  const uint32_t ag = (((a >> 8) & 0x00ff00ffu) * g + ((b >> 8) & 0x00ff00ffu) * f) & 0xff00ff00u;
+  return rb | ag;
+}
+void Renderer::resolveWorld() {
+  if (!worldPending_)
+    return;
+  worldPending_ = false;
+  // Fixed-point bilinear upscale of the world buffer into the 640x480 frame.
+  // Destination pixel centres map to 16.16 source positions, clamped at edges.
+  struct Tap {
+    uint16_t i0, i1, f;
+  };
+  auto taps = [](int src, int dst, Tap *out) {
+    const int32_t step = int32_t((int64_t(src) << 16) / dst);
+    for (int i = 0; i < dst; ++i) {
+      int32_t p = i * step + step / 2 - 32768;
+      if (p < 0)
+        p = 0;
+      const int i0 = std::min(src - 1, int(p >> 16));
+      out[i] = {uint16_t(i0), uint16_t(std::min(src - 1, i0 + 1)), uint16_t((p >> 8) & 255)};
+    }
+  };
+  std::array<Tap, width> xs;
+  std::array<Tap, height> ys;
+  taps(worldW_, width, xs.data());
+  taps(worldH_, height, ys.data());
+  const uint32_t *const source = world_.data();
+  uint32_t *const frame = color_.data();
+  const size_t stride = size_t(worldW_);
+  parallelRenderRows(height, 32, [&](int begin, int end) {
+    for (int y = begin; y < end; ++y) {
+      const Tap ty = ys[size_t(y)];
+      const uint32_t *r0 = source + ty.i0 * stride, *r1 = source + ty.i1 * stride;
+      uint32_t *out = frame + size_t(y) * width;
+      if (ty.f == 0) {
+        for (int x = 0; x < width; ++x) {
+          const Tap tx = xs[size_t(x)];
+          out[x] = lerpPixel(r0[tx.i0], r0[tx.i1], tx.f);
+        }
+        continue;
+      }
+      for (int x = 0; x < width; ++x) {
+        const Tap tx = xs[size_t(x)];
+        out[x] = lerpPixel(lerpPixel(r0[tx.i0], r0[tx.i1], tx.f),
+                           lerpPixel(r1[tx.i0], r1[tx.i1], tx.f), ty.f);
+      }
+    }
+  });
+}
 void Renderer::background(const Image &sky, float heading, float horizon) {
-  const int width = pixelWidth(), height = pixelHeight();
-  int limit = std::clamp(int((horizon + 30) * scale_), 0, height);
+  beginWorldDraw();
+  const int width = worldW_, height = worldH_;
+  // Exactly 1 or 2 (the enhanced scale) unless the world scale is reduced.
+  const float rowScale = float(worldH_) / Renderer::height;
+  int limit = std::clamp(int((horizon + 30) * rowScale), 0, height);
+  uint32_t *const target = worldColor();
   const FilteredTexture *filter =
       enhanced_ && !sky.pixels.empty() ? &filtered(sky, false) : nullptr;
   auto rows = [&](int begin, int end) {
@@ -42,11 +144,11 @@ void Renderer::background(const Image &sky, float heading, float horizon) {
           int g = 70 + int(25.0f * (height - y) / height);
           color = 0xff000000u | (uint32_t(g / 2) << 16) | (uint32_t(g) << 8) | uint32_t(g / 3);
         }
-        color_[size_t(y) * width + x] = color;
+        target[size_t(y) * width + x] = color;
       }
     }
   };
-  if (enhanced_)
+  if (enhanced_ || scaledWorld())
     parallelRenderRows(height, 32, rows);
   else
     rows(0, height);
@@ -60,7 +162,10 @@ static uint32_t shade(uint32_t c, float l, float fog, uint32_t tint) {
 }
 void Renderer::triangle(const Camera &cam, DrawVertex a, DrawVertex b, DrawVertex c,
                         const Image *texture, uint32_t color, bool mask, float light, bool blend) {
-  const int width = pixelWidth(), height = pixelHeight();
+  beginWorldDraw();
+  const int width = worldW_, height = worldH_;
+  // The focal length follows the world size: x2 enhanced, x(worldWidth/640) scaled.
+  const float focal = cam.focal * (float(worldW_) / Renderer::width);
   struct CV {
     float x, y, z, u, v, light, alpha;
   };
@@ -94,8 +199,8 @@ void Renderer::triangle(const Camera &cam, DrawVertex a, DrawVertex b, DrawVerte
   }
   auto project = [&](CV v) {
     float q = 1 / v.z;
-    return Projected{width * 0.5f + cam.focal * scale_ * v.x * q,
-                     height * 0.5f - cam.focal * scale_ * v.y * q,
+    return Projected{width * 0.5f + focal * v.x * q,
+                     height * 0.5f - focal * v.y * q,
                      q,
                      v.u * q,
                      v.v * q,
@@ -131,7 +236,7 @@ void Renderer::triangle(const Camera &cam, DrawVertex a, DrawVertex b, DrawVerte
 void Renderer::flushWorld() {
   if (commands_.empty())
     return;
-  parallelRenderRows(pixelHeight(), 32, [&](int begin, int end) {
+  parallelRenderRows(worldH_, 32, [&](int begin, int end) {
     for (size_t index : bands_[size_t(begin / 32)]) {
       const auto &c = commands_[index];
       raster(c.a, c.b, c.c, c.texture, c.tint, c.mask, c.light, c.farPlane, c.blend, begin, end,
@@ -145,7 +250,8 @@ void Renderer::flushWorld() {
 void Renderer::raster(Projected a, Projected b, Projected c, const Image *texture, uint32_t tint,
                       bool mask, float light, float farPlane, bool blend, int rowBegin, int rowEnd,
                       const FilteredTexture *filter) {
-  const int width = pixelWidth(), height = pixelHeight();
+  const int width = worldW_, height = worldH_;
+  uint32_t *const target = worldColor();
   for (const auto &v : {a, b, c})
     if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.q) || !std::isfinite(v.u) ||
         !std::isfinite(v.v))
@@ -263,9 +369,9 @@ void Renderer::raster(Projected a, Projected b, Projected c, const Image *textur
       if (blend) {
         float alpha = std::clamp((w0 * a.alpha + w1 * b.alpha + w2 * c.alpha) / q, 0.f, 1.f);
         // Shadow overlays test ground depth but do not replace it.
-        color_[index] = mixColor(color_[index], shaded, alpha * (1 - fog));
+        target[index] = mixColor(target[index], shaded, alpha * (1 - fog));
       } else {
-        color_[index] = shaded;
+        target[index] = shaded;
         depth_[index] = q;
       }
     }
@@ -300,6 +406,8 @@ void Renderer::mesh(const Camera &cam, const Mesh &mesh, const Image &texture, V
   }
 }
 void Renderer::rect(int x, int y, int w, int h, uint32_t c) {
+  if (worldPending_)
+    resolveWorld();
   const int width = pixelWidth(), height = pixelHeight();
   x *= scale_;
   y *= scale_;
@@ -310,6 +418,8 @@ void Renderer::rect(int x, int y, int w, int h, uint32_t c) {
       color_[size_t(j) * width + i] = c;
 }
 void Renderer::line(int x, int y, int xx, int yy, uint32_t c) {
+  if (worldPending_)
+    resolveWorld();
   const int width = pixelWidth(), height = pixelHeight();
   x *= scale_;
   y *= scale_;
@@ -457,6 +567,8 @@ void Renderer::blit(const Image &image, int x, int y, int w, int h, bool transpa
     blitKey(image, x, y, 0, w, h);
     return;
   }
+  if (worldPending_)
+    resolveWorld();
   if (image.pixels.empty())
     return;
   if (w <= 0)
@@ -476,6 +588,8 @@ void Renderer::blit(const Image &image, int x, int y, int w, int h, bool transpa
     }
 }
 void Renderer::blitKey(const Image &image, int x, int y, uint8_t key, int w, int h) {
+  if (worldPending_)
+    resolveWorld();
   if (image.pixels.empty())
     return;
   if (w <= 0)
@@ -500,6 +614,8 @@ void Renderer::sprite(const Sprite &sprite, int anchorX, int anchorY, uint8_t ke
   blitKey(sprite.image, anchorX - sprite.hotspotX, anchorY - sprite.hotspotY, key);
 }
 void Renderer::dim(float amount) {
+  if (worldPending_)
+    resolveWorld();
   float factor = std::clamp(1 - amount, 0.0f, 1.0f);
   for (auto &c : color_)
     c = shade(c, factor, 0, 0xffffffff);

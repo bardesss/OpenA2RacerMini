@@ -364,4 +364,19 @@ void ProfileStore::save() const {
     throw;
   }
 }
+std::string defaultPlayerName(const std::vector<std::string> &existing) {
+  auto upper = [](char c) { return c >= 'a' && c <= 'z' ? char(c - 'a' + 'A') : c; };
+  auto sameIgnoringCase = [&](char a, char b) { return upper(a) == upper(b); };
+  auto taken = [&](const std::string &candidate) {
+    return std::any_of(existing.begin(), existing.end(), [&](const std::string &name) {
+      return std::equal(name.begin(), name.end(), candidate.begin(), candidate.end(),
+                        sameIgnoringCase);
+    });
+  };
+  std::string name = "SPELER";
+  // At most capacity + 1 candidates are needed; "SPELER 11" fits in 31 characters.
+  for (int n = 2; taken(name); ++n)
+    name = "SPELER " + std::to_string(n);
+  return name;
+}
 } // namespace a2

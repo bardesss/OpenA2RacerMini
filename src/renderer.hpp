@@ -25,6 +25,14 @@ public:
   bool enhanced() const { return enhanced_; }
   int pixelWidth() const { return width * scale_; }
   int pixelHeight() const { return height * scale_; }
+  // Optional reduced world resolution (classic mode only). The 3D world draws
+  // into a worldWidth x worldHeight buffer that finishWorld() upscales into the
+  // 640x480 frame, so the HUD drawn afterwards stays sharp. At 1.0 the world
+  // draws straight into the frame, exactly as without this option.
+  void setWorldScale(float scale);
+  float worldScale() const { return worldScale_; }
+  int worldWidth() const;
+  int worldHeight() const;
   void resetTextureCache();
   void finishWorld();
   void flushWorld();
@@ -56,6 +64,24 @@ private:
   std::vector<uint32_t> scratch_;
   bool enhanced_ = false;
   int scale_ = 1;
+  // World target: color_ itself unless the world scale is below 1.0, then
+  // world_ (worldW_ x worldH_). depth_ always matches the world target.
+  std::vector<uint32_t> world_;
+  float worldScale_ = 1;
+  int worldW_ = width, worldH_ = height;
+  bool worldPending_ = false;
+  // Set when a world primitive arrives after the reduced world was already
+  // resolved this frame (for example a menu backdrop, then the Car mesh): the
+  // rest of the frame's world draws straight into the frame at full size.
+  bool worldDirect_ = false;
+  bool scaledWorld() const { return worldScale_ < 1; }
+  uint32_t *worldColor() { return scaledWorld() && !worldDirect_ ? world_.data() : color_.data(); }
+  void resolveWorld();
+  void beginWorldDraw() {
+    if (scaledWorld() && !worldPending_ && !worldDirect_)
+      drawWorldDirect();
+  }
+  void drawWorldDirect();
   struct CachedTexture {
     FilteredTexture texture;
     uint64_t used;

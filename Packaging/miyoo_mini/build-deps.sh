@@ -26,9 +26,10 @@
 #    path keeps only a pointer to the caller's pixels (UpdateTexture does not
 #    copy) and blits them later from a thread, while the game already draws
 #    the next frame into the same buffer: the screen flickers.
-#  - render: the mmiyoo renderer declines unless the mmiyoo video driver
-#    runs, so SDL falls back to its software renderer under the dummy driver
-#    (qemu tests); its now synchronous MI_GFX blit would crash there.
+#  - render: skip the MI_GFX blit and flip unless the mmiyoo video driver
+#    runs. The mmiyoo renderer is the fork's only one, so SDL uses it under
+#    the dummy driver too (qemu tests), where the now synchronous blit would
+#    crash in the MI_GFX ioctls.
 #  - audio: the MI_AO driver always plays 16-bit samples but leaves the
 #    requested format in the spec; set S16 so SDL converts (the game asks
 #    for float32, which came out as silence).
@@ -116,11 +117,15 @@ grep -q 'if ((evt.mode == MMIYOO_MOUSE_MODE) || (srcrect->w == 800)) {' \
 sed -i 's|if ((evt.mode == MMIYOO_MOUSE_MODE) \|\| (srcrect->w == 800)) {|if (1 /* OpenA2RacerMini: synchronous blit */) {|' \
   src/render/mmiyoo/SDL_render_mmiyoo.c
 grep -q 'OpenA2RacerMini: synchronous blit' src/render/mmiyoo/SDL_render_mmiyoo.c
-grep -q '^    renderer = (SDL_Renderer \*) SDL_calloc(1, sizeof(\*renderer));$' \
+grep -q '^    GFX_Copy(pixels, src, dst, pitch, 0, E_MI_GFX_ROTATE_180);$' \
   src/render/mmiyoo/SDL_render_mmiyoo.c
-sed -i 's|^    renderer = (SDL_Renderer \*) SDL_calloc(1, sizeof(\*renderer));$|    if (SDL_strcmp(SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "", MMIYOO_DRIVER_NAME) != 0) {\n        SDL_SetError("mmiyoo renderer needs the mmiyoo video driver"); /* OpenA2RacerMini: MI_GFX only */\n        return NULL;\n    }\n&|' \
+grep -q '^        GFX_Flip();$' src/render/mmiyoo/SDL_render_mmiyoo.c
+sed -i \
+  -e 's|^    GFX_Copy(pixels, src, dst, pitch, 0, E_MI_GFX_ROTATE_180);$|    if (oa2_mi_gfx()) /* OpenA2RacerMini: MI_GFX only */\n    &|' \
+  -e 's|^        GFX_Flip();$|        if (oa2_mi_gfx())\n    &|' \
+  -e 's|^int My_QueueCopy(SDL_Texture \*texture, const void \*pixels, const SDL_Rect \*srcrect, const SDL_FRect \*dstrect)$|/* OpenA2RacerMini: true when the mmiyoo video driver runs (not dummy). */\nstatic int oa2_mi_gfx(void)\n{\n    const char *driver = SDL_GetCurrentVideoDriver();\n    return driver \&\& (SDL_strcmp(driver, MMIYOO_DRIVER_NAME) == 0);\n}\n\n&|' \
   src/render/mmiyoo/SDL_render_mmiyoo.c
-grep -q 'OpenA2RacerMini: MI_GFX only' src/render/mmiyoo/SDL_render_mmiyoo.c
+[ "$(grep -c 'oa2_mi_gfx' src/render/mmiyoo/SDL_render_mmiyoo.c)" = 3 ]
 grep -q '    SDL_zerop(this->hidden);' src/audio/mmiyoo/SDL_audio_mmiyoo.c
 sed -i 's|^    SDL_zerop(this->hidden);$|    SDL_zerop(this->hidden);\n    this->spec.format = AUDIO_S16SYS; /* OpenA2RacerMini: MI_AO plays S16 */\n    SDL_CalculateAudioSpec(\&this->spec);|' \
   src/audio/mmiyoo/SDL_audio_mmiyoo.c

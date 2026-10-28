@@ -141,12 +141,15 @@ export CFLAGS="-O2 -marm -mcpu=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard"
 export MOD=mmiyoo
 # configure.ac gates the MI_AO audio libs on this literal shell variable.
 export HOST=arm-linux
-# autom4te judges its cache by whole-second mtimes: when the checkout and the
-# configure.ac patch above land in the same second it reuses the unpatched
-# configure (link fails on -lEGL). Drop the cache and check the result.
-rm -rf autom4te.cache
+# The fork commits a generated configure, and autoconf keeps an output whose
+# mtime is not older than configure.ac by whole seconds: when the checkout and
+# the configure.ac patch above land in the same second, the unpatched
+# configure (-lEGL -lGLESv2) survives. Remove it so autogen.sh regenerates it.
+rm -rf autom4te.cache configure
 ./autogen.sh
-grep -q -- '-lmi_gfx' configure && ! grep -qF -- '-L. -lEGL -lGLESv2' configure
+test -f configure
+! grep -q -- '-L\. -lEGL' configure
+grep -q -- '-L\.\./mmiyoo/lib -lmi_sys -lmi_gfx -lmi_common' configure
 ./configure \
   --host="$HOST_TRIPLE" --prefix="$PREFIX" \
   --disable-static --enable-shared --disable-rpath \
